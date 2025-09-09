@@ -1,2 +1,4 @@
 redis==5.0.7
 python-dotenv==1.0.1
+pytest>=7.0
+python-json-logger>=2.0

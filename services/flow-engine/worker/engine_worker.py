@@ -1,7 +1,36 @@
-import os, json, time, asyncio
+import os, json, time, asyncio, logging
+from pythonjsonlogger import jsonlogger
 from redis import Redis
 
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
+
+handler = logging.StreamHandler()
+formatter = jsonlogger.JsonFormatter('%(asctime)s %(name)s %(levelname)s %(message)s')
+handler.setFormatter(formatter)
+logger = logging.getLogger("engine_worker")
+logger.addHandler(handler)
+logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+
+def parse_kvs(kvs):
+	"""Normalize redis XREAD key/value payloads into a dict of strings.
+
+	Accepts either a dict or a flat list (k, v, k, v, ...), with bytes or str values.
+	Returns a dict[str, str] or None on failure.
+	"""
+	try:
+		fields = {}
+		if isinstance(kvs, dict):
+			for k, v in kvs.items():
+				fields[str(k)] = str(v)
+		else:
+			for i in range(0, len(kvs), 2):
+				k = kvs[i].decode() if isinstance(kvs[i], bytes) else kvs[i]
+				v = kvs[i+1].decode() if isinstance(kvs[i+1], bytes) else kvs[i+1]
+				fields[str(k)] = str(v)
+		return fields
+	except Exception:
+		logger.exception("parse_kvs failed")
+		return None
 
 def classify_intent(text: str) -> str:
 	t = (text or "").lower()
@@ -45,16 +74,19 @@ async def handle_message(msg_id: str, fields: dict):
 		reply = "Gracias por tu mensaje. Un agente te responderá pronto."
 
 	# publish to outbox (so messaging-gateway will pick it)
+	# include original incoming text in reply for traceability
 	try:
-		out = {"channel_id": "wa_main", "to": payload.get("contact", {}).get("phone", "unknown"), "type": "text", "text": reply, "client_id": f"auto_{int(time.time()*1000)}"}
-		redis.xadd("nf:outbox", out)
+		reply_text = f"{reply} -- received: {text}"
+		out = {"channel_id": "wa_main", "to": payload.get("contact", {}).get("phone", "unknown"), "type": "text", "text": reply_text, "client_id": f"auto_{int(time.time()*1000)}"}
+		# ensure all values are strings for redis stream
+		redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
 	except Exception:
-		pass
+		logger.exception("engine xadd failed")
 
 async def loop():
 	# start from the beginning in dev so backlog is processed
 	last_id = "0-0"
-	print("engine_worker starting")
+	logger.info("engine_worker starting")
 	while True:
 		try:
 			# Use Redis XREAD via execute_command for consistent server semantics across clients
@@ -69,16 +101,24 @@ async def loop():
 				for msg in msgs:
 					msg_id = msg[0].decode() if isinstance(msg[0], bytes) else msg[0]
 					kvs = msg[1]
-					# convert flat list into dict of strings
+					# convert flat list or dict into dict of strings
 					fields = {}
-					for i in range(0, len(kvs), 2):
-						k = kvs[i].decode() if isinstance(kvs[i], bytes) else kvs[i]
-						v = kvs[i+1].decode() if isinstance(kvs[i+1], bytes) else kvs[i+1]
-						fields[k] = v
+					try:
+						if isinstance(kvs, dict):
+							for k, v in kvs.items():
+								fields[str(k)] = str(v)
+						else:
+							for i in range(0, len(kvs), 2):
+								k = kvs[i].decode() if isinstance(kvs[i], bytes) else kvs[i]
+								v = kvs[i+1].decode() if isinstance(kvs[i+1], bytes) else kvs[i+1]
+								fields[k] = v
+					except Exception:
+						logger.exception("engine_worker failed parsing XREAD fields")
+						continue
 					last_id = msg_id
 					await handle_message(msg_id, fields)
-		except Exception as e:
-			print("engine error", e)
+		except Exception:
+			logger.exception("engine error")
 			await asyncio.sleep(1)
 
 if __name__ == "__main__":
