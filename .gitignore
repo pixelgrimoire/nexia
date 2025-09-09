@@ -1,0 +1,4 @@
+# Archivos ignorados
+node_modules/
+.env
+__pycache__/
