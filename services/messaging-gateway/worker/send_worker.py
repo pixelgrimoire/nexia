@@ -20,15 +20,29 @@ async def process_message(msg_id: str, fields: dict):
 	client_id = fields.get("client_id")
 	if FAKE:
 		result = {"fake": True, "to": to, "text": text, "client_id": client_id, "ts": time.time()}
+		# preserve original text if present for tracing
+		if fields.get('orig_text'):
+			result['orig_text'] = fields.get('orig_text')
+		# preserve trace_id if provided
+		if fields.get('trace_id'):
+			result['trace_id'] = fields.get('trace_id')
 	else:
 		# real send would be implemented here (httpx.post to WhatsApp API)
 		result = {"fake": False, "to": to, "text": text, "client_id": client_id, "ts": time.time()}
+		if fields.get('orig_text'):
+			result['orig_text'] = fields.get('orig_text')
+		if fields.get('trace_id'):
+			result['trace_id'] = fields.get('trace_id')
 	try:
 		# ensure all values are strings for redis stream
 		redis.xadd("nf:sent", {k: str(v) for k, v in result.items()})
 	except Exception:
 		logger.exception("send_worker xadd error")
-	logger.info("processed %s %s", msg_id, result)
+	# log with trace_id when available for correlation
+	if result.get('trace_id'):
+		logger.info("processed %s", msg_id, extra={"trace_id": result.get('trace_id'), "to": result.get('to'), "client_id": result.get('client_id')})
+	else:
+		logger.info("processed %s %s", msg_id, result)
 
 async def loop():
 	# start from the beginning in dev so backlog is processed

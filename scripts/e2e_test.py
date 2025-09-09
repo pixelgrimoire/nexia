@@ -50,55 +50,61 @@ def xrevrange_last_entry():
 # base64 payload to avoid shell quoting issues
 b64 = 'eyJlbnRyeSI6IFt7ImNoYW5nZXMiOiBbeyJ2YWx1ZSI6IHsibWVzc2FnZXMiOiBbeyJmcm9tIjogIjk4NzYiLCAidGV4dCI6IHsiYm9keSI6ICJQSVBFX0VOVEVSX1RFU1QifX1dfX1dfV0sICJjb250YWN0IjogeyJwaG9uZSI6ICI5ODc2In19'
 
-print("Counting nf:sent (before) ...")
-before = xlen_nf_sent()
-if before is None:
-    sys.exit(2)
-print("nf:sent before:", before)
+def main():
+    print("Counting nf:sent (before) ...")
+    before = xlen_nf_sent()
+    if before is None:
+        sys.exit(2)
+    print("nf:sent before:", before)
 
-# Build python code to run inside the webhook-receiver container
-inner = (
-    "import http.client,base64,hmac,hashlib\n"
-    f"b64='{b64}'\n"
-    "body=base64.b64decode(b64)\n"
-    "secret=b'dev_secret'\n"
-    "sig='sha256='+hmac.new(secret, body, hashlib.sha256).hexdigest()\n"
-    "conn=http.client.HTTPConnection('127.0.0.1',8000)\n"
-    "conn.request('POST','/api/webhooks/whatsapp',body,{'X-Hub-Signature-256':sig,'Content-Type':'application/json'})\n"
-    "r=conn.getresponse()\n"
-    "print(r.status)\n"
-    "print(r.read().decode())\n"
-)
+    # Build python code to run inside the webhook-receiver container
+    inner = (
+        "import http.client,base64,hmac,hashlib\n"
+        f"b64='{b64}'\n"
+        "body=base64.b64decode(b64)\n"
+        "secret=b'dev_secret'\n"
+        "sig='sha256='+hmac.new(secret, body, hashlib.sha256).hexdigest()\n"
+        "conn=http.client.HTTPConnection('127.0.0.1',8000)\n"
+        "conn.request('POST','/api/webhooks/whatsapp',body,{'X-Hub-Signature-256':sig,'Content-Type':'application/json'})\n"
+        "r=conn.getresponse()\n"
+        "print(r.status)\n"
+        "print(r.read().decode())\n"
+    )
 
-print("Posting test webhook into webhook-receiver (in-container) ...")
-rc, out, err = run(["docker","compose","exec","-T","webhook-receiver","python","-c", inner])
-print(out)
-if rc != 0:
-    print("Error posting webhook:", err)
-    sys.exit(3)
+    print("Posting test webhook into webhook-receiver (in-container) ...")
+    rc, out, err = run(["docker","compose","exec","-T","webhook-receiver","python","-c", inner])
+    print(out)
+    if rc != 0:
+        print("Error posting webhook:", err)
+        sys.exit(3)
 
-# small delay to allow workers to process
-import time
-time.sleep(1)
+    # small delay to allow workers to process
+    import time
+    time.sleep(1)
 
-print("Counting nf:sent (after) ...")
-after = xlen_nf_sent()
-if after is None:
-    sys.exit(4)
-print("nf:sent after:", after)
+    print("Counting nf:sent (after) ...")
+    after = xlen_nf_sent()
+    if after is None:
+        sys.exit(4)
+    print("nf:sent after:", after)
 
-if after > before:
-    # verify content of last entry contains test marker
-    eid, fields = xrevrange_last_entry()
-    print("last nf:sent id:", eid)
-    print(fields)
-    text = fields.get('text') or fields.get('message') or ''
-    if 'ENTER_TEST' in text or 'ENTER_TEST' in fields.get('text',''):
-        print(f"E2E PASS: nf:sent increased ({before} -> {after}) and entry contains test marker")
-        sys.exit(0)
+    if after > before:
+        # verify content of last entry contains test marker
+        eid, fields = xrevrange_last_entry()
+        print("last nf:sent id:", eid)
+        print(fields)
+        text = fields.get('text') or fields.get('message') or ''
+        orig = fields.get('orig_text') or ''
+        if 'ENTER_TEST' in text or 'ENTER_TEST' in orig:
+            print(f"E2E PASS: nf:sent increased ({before} -> {after}) and entry contains test marker")
+            sys.exit(0)
+        else:
+            print(f"E2E FAIL: nf:sent increased but entry did not contain test marker ({before} -> {after})")
+            sys.exit(6)
     else:
-        print(f"E2E FAIL: nf:sent increased but entry did not contain test marker ({before} -> {after})")
-        sys.exit(6)
-else:
-    print(f"E2E FAIL: nf:sent did not increase ({before} -> {after})")
-    sys.exit(5)
+        print(f"E2E FAIL: nf:sent did not increase ({before} -> {after})")
+        sys.exit(5)
+
+
+if __name__ == "__main__":
+    main()

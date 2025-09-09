@@ -1,4 +1,4 @@
-import os, json, time, asyncio, logging
+import os, json, time, asyncio, logging, uuid
 from pythonjsonlogger import jsonlogger
 from redis import Redis
 
@@ -74,12 +74,14 @@ async def handle_message(msg_id: str, fields: dict):
 		reply = "Gracias por tu mensaje. Un agente te responderá pronto."
 
 	# publish to outbox (so messaging-gateway will pick it)
-	# include original incoming text in reply for traceability
+	# publish reply and keep original text in metadata for tracing
 	try:
-		reply_text = f"{reply} -- received: {text}"
-		out = {"channel_id": "wa_main", "to": payload.get("contact", {}).get("phone", "unknown"), "type": "text", "text": reply_text, "client_id": f"auto_{int(time.time()*1000)}"}
+		trace_id = str(uuid.uuid4())
+		out = {"channel_id": "wa_main", "to": payload.get("contact", {}).get("phone", "unknown"), "type": "text", "text": reply, "client_id": f"auto_{int(time.time()*1000)}", "orig_text": text, "trace_id": trace_id}
 		# ensure all values are strings for redis stream
 		redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
+		# log the published message with trace_id for observability
+		logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
 	except Exception:
 		logger.exception("engine xadd failed")
 

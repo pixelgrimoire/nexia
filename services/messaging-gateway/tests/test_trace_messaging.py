@@ -1,6 +1,13 @@
 import asyncio
+import importlib.util
+from pathlib import Path
 
-from services.messaging_gateway.worker import send_worker
+# Load send_worker by file path
+root = Path(__file__).resolve().parents[2].parent
+module_path = root / "services" / "messaging-gateway" / "worker" / "send_worker.py"
+spec = importlib.util.spec_from_file_location("send_worker", str(module_path))
+send_worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(send_worker)
 
 
 def test_process_message_preserves_trace_id(monkeypatch):
