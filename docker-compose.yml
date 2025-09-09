@@ -1,3 +1,87 @@
-version: '3.8'
 services:
-  # Define your services here
+  traefik:
+    image: traefik:v3.0
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: nf_user
+      POSTGRES_PASSWORD: nf_pass
+      POSTGRES_DB: nexia
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+
+  frontend:
+    build: ./apps/frontend
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://nf_user:nf_pass@postgres:5432/nexia
+
+  webhook-receiver:
+    build:
+      context: .
+      dockerfile: services/webhook-receiver/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - WHATSAPP_APP_SECRET=dev_secret
+      - WHATSAPP_VERIFY_TOKEN=change-me
+
+  messaging-gateway:
+    build:
+      context: .
+      dockerfile: services/messaging-gateway/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - WHATSAPP_FAKE_MODE=true
+
+  messaging-worker:
+    build:
+      context: .
+      dockerfile: services/messaging-gateway/Dockerfile
+    command: ["python", "worker/send_worker.py"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - WHATSAPP_FAKE_MODE=true
+    depends_on:
+      - redis
+
+  flow-engine:
+    build:
+      context: .
+      dockerfile: services/flow-engine/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+
+  flow-worker:
+    build:
+      context: .
+      dockerfile: services/flow-engine/Dockerfile
+    command: ["python", "worker/engine_worker.py"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  contacts:
+    build:
+      context: .
+      dockerfile: services/contacts/Dockerfile
+
+  analytics:
+    build:
+      context: .
+      dockerfile: services/analytics/Dockerfile
+
+volumes:
+  pgdata:
+  redisdata:
