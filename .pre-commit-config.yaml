@@ -1,0 +1,11 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-duplicate-tests
+        name: Check duplicate test basenames
+        entry: python scripts/check_duplicate_tests.py
+        language: python
+        additional_dependencies: []
+        stages: [pre-commit]
+
+  # pytest hook removed because CI runs the full test suite; keep commits fast

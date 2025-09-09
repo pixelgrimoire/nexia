@@ -46,3 +46,24 @@ Notes
 - The E2E test posts into the `webhook-receiver` container using an in-container Python command so signature computation is correct.
 - CI already runs the Python E2E smoke test and the flow-engine unit tests.
 - If you see failures related to missing packages, create and activate a venv and install the requirements as shown above.
+
+New helper scripts
+
+- `scripts/bootstrap.ps1` and `scripts/bootstrap.sh` create a repo-level `.venv` and install service requirements.
+- `scripts/run_tests.ps1` and `scripts/run_tests.sh` run the duplicate-test checker and then `pytest` using the selected venv.
+
+Examples (Windows PowerShell):
+
+```powershell
+.
+.\scripts\bootstrap.ps1
+.
+.\scripts\run_tests.ps1
+```
+
+Examples (POSIX):
+
+```bash
+./scripts/bootstrap.sh
+./scripts/run_tests.sh
+```

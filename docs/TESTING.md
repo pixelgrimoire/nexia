@@ -17,4 +17,40 @@ python -m venv .venv
 
 - CI runs `pytest -q` at repo root. If you add tests, pick unique names or add a service-specific suffix.
 
+Helper scripts
+ - Windows (PowerShell):
+
+```powershell
+.\scripts\bootstrap.ps1   # creates .venv and installs service deps
+.\scripts\run_tests.ps1  # runs duplicate checker and pytest using selected venv
+```
+
+ - POSIX (macOS / Linux):
+
+```bash
+./scripts/bootstrap.sh
+./scripts/run_tests.sh
+```
+
 If you want, I can open a PR that consolidates the remaining test files and updates the workflow with a small lint step to detect duplicate basenames.
+
+Pre-commit (optional but recommended)
+
+Windows (PowerShell):
+
+```powershell
+# install into repo venv (recommended)
+python -m pip install --upgrade pip
+pip install pre-commit
+pre-commit install
+```
+
+POSIX/macOS:
+
+```bash
+python -m pip install --upgrade pip
+pip install pre-commit
+pre-commit install
+```
+
+Once installed, the duplicate-test check runs automatically on commit; CI also runs the same check.

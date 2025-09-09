@@ -1,5 +1,5 @@
 import os, json, time, asyncio, logging, uuid
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger import json as jsonlogger
 from redis import Redis
 
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
