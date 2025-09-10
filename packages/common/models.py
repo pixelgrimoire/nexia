@@ -63,6 +63,7 @@ class Message(Base):
     status = Column(String)     # delivered|read|failed
     meta = Column(JSONB)
     client_id = Column(String)
+    created_at = Column(DateTime)
 
 class Template(Base):
     __tablename__ = "templates"

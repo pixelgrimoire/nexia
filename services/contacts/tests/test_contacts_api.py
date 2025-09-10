@@ -31,6 +31,10 @@ class ContactModel(DBBase):
 def client() -> Generator[TestClient, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         os.environ["DATABASE_URL"] = f"sqlite:///{tmpdir}/test.db"
+        # Ensure the common DB module uses this DATABASE_URL
+        import importlib
+        import packages.common.db as common_db  # type: ignore
+        importlib.reload(common_db)
         root = Path(__file__).resolve().parents[3]
         sys.path.append(str(root))
         import services.contacts.app.main as main  # noqa: E402

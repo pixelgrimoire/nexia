@@ -1,8 +1,10 @@
-import os, asyncio, time, logging
+import os, asyncio, time, logging, uuid
 
 import httpx
 from pythonjsonlogger import json as jsonlogger
 from redis import Redis
+from packages.common.db import SessionLocal
+from packages.common.models import Message as DBMessage, Conversation as DBConversation, Contact as DBContact
 
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
 FAKE = os.getenv("WHATSAPP_FAKE_MODE", "true").lower() == "true"
@@ -26,6 +28,10 @@ async def process_message(msg_id: str, fields: dict):
             result['orig_text'] = fields.get('orig_text')
         if fields.get('trace_id'):
             result['trace_id'] = fields.get('trace_id')
+        if fields.get('org_id'):
+            result['org_id'] = fields.get('org_id')
+        if fields.get('channel_id'):
+            result['channel_id'] = fields.get('channel_id')
     else:
         url = f"https://graph.facebook.com/v20.0/{PHONE_ID}/messages"
         headers = {"Authorization": f"Bearer {TOKEN}"}
@@ -56,6 +62,10 @@ async def process_message(msg_id: str, fields: dict):
             result['orig_text'] = fields.get('orig_text')
         if fields.get('trace_id'):
             result['trace_id'] = fields.get('trace_id')
+        if fields.get('org_id'):
+            result['org_id'] = fields.get('org_id')
+        if fields.get('channel_id'):
+            result['channel_id'] = fields.get('channel_id')
     try:
         # ensure all values are strings for redis stream
         redis.xadd("nf:sent", {k: str(v) for k, v in result.items()})
@@ -66,6 +76,49 @@ async def process_message(msg_id: str, fields: dict):
         logger.info("processed %s", msg_id, extra={"trace_id": result.get('trace_id'), "to": result.get('to'), "client_id": result.get('client_id')})
     else:
         logger.info("processed %s %s", msg_id, result)
+
+    # Best-effort persistence of outbound message when conversation context is available
+    try:
+        with SessionLocal() as db:
+            conv_id = fields.get('conversation_id')
+            conv = None
+            if conv_id:
+                conv = db.get(DBConversation, conv_id)
+            # Attempt to resolve conversation if missing and org/channel/to present
+            if not conv and fields.get('org_id') and fields.get('channel_id') and fields.get('to'):
+                # find contact by wa_id/phone within org
+                ct = (
+                    db.query(DBContact)
+                    .filter(DBContact.org_id == str(fields.get('org_id')))
+                    .filter((DBContact.wa_id == fields.get('to')) | (DBContact.phone == fields.get('to')))
+                    .first()
+                )
+                if ct:
+                    conv = (
+                        db.query(DBConversation)
+                        .filter(DBConversation.org_id == str(fields.get('org_id')))
+                        .filter(DBConversation.contact_id == ct.id)
+                        .filter(DBConversation.channel_id == str(fields.get('channel_id')))
+                        .filter(DBConversation.state == 'open')
+                        .first()
+                    )
+            if conv:
+                # persist message row
+                db_msg = DBMessage(
+                    id=str(uuid.uuid4()),
+                    conversation_id=conv.id,
+                    direction='out',
+                    type=fields.get('type') or 'text',
+                    content={'text': text} if text else None,
+                    template_id=None,
+                    status=None,
+                    meta={'trace_id': fields.get('trace_id'), 'wa_msg_id': result.get('wa_msg_id')} if (fields.get('trace_id') or result.get('wa_msg_id')) else None,
+                    client_id=client_id,
+                )
+                db.add(db_msg)
+                db.commit()
+    except Exception:
+        logger.exception("persist outbound failed")
 
 async def loop():
     # start from the beginning in dev so backlog is processed

@@ -324,11 +324,32 @@ class MessageOut(BaseModel):
 
 
 @app.get("/api/conversations/{conv_id}/messages", response_model=list[MessageOut])
-def list_messages(conv_id: str, limit: int = 100, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_messages(conv_id: str, limit: int = 100, offset: int = 0, after_id: str | None = None, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")
-    rows = db.query(Message).filter(Message.conversation_id == conv_id).limit(min(limit, 500)).all()
+    # order by created_at if available, otherwise id
+    order_cols = []
+    if hasattr(Message, 'created_at'):
+        order_cols.append(getattr(Message, 'created_at'))
+    order_cols.append(Message.id)
+    q = db.query(Message).filter(Message.conversation_id == conv_id).order_by(*order_cols)
+    # cursor by after_id
+    if after_id:
+        if hasattr(Message, 'created_at'):
+            try:
+                anchor = db.query(Message).filter(Message.id == after_id).first()
+                if anchor and getattr(anchor, 'created_at', None) is not None:
+                    q = q.filter(getattr(Message, 'created_at') > getattr(anchor, 'created_at'))
+                else:
+                    q = q.filter(Message.id > after_id)
+            except Exception:
+                q = q.filter(Message.id > after_id)
+        else:
+            q = q.filter(Message.id > after_id)
+    if offset:
+        q = q.offset(max(offset, 0))
+    rows = q.limit(min(limit, 500)).all()
     out: list[MessageOut] = []
     for r in rows:
         out.append(MessageOut(id=r.id, conversation_id=r.conversation_id, direction=r.direction, type=r.type, content=r.content, client_id=r.client_id))
@@ -378,6 +399,32 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
         pass
 
     return MessageOut(id=m.id, conversation_id=m.conversation_id, direction=m.direction, type=m.type, content=m.content, client_id=m.client_id)
+
+
+class MarkReadBody(BaseModel):
+    up_to_id: str | None = None
+
+
+@app.post("/api/conversations/{conv_id}/messages/read")
+def mark_messages_read(conv_id: str, body: MarkReadBody, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    q = db.query(Message).filter(Message.conversation_id == conv_id, Message.direction == "in")
+    # Without timestamps, apply a basic id-based cutoff when provided
+    if body.up_to_id:
+        try:
+            q = q.filter(Message.id <= body.up_to_id)  # lexical compare in SQLite/Postgres UUID/text
+        except Exception:
+            pass
+    updated = 0
+    for msg in q.all():
+        if getattr(msg, "status", None) != "read":
+            msg.status = "read"
+            updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated}
 # ----------------------------------------------------------------------------
 # Channels (tenancy + uniqueness)
 

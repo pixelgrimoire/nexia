@@ -50,3 +50,10 @@ Channels (WA Cloud / Bridge)
 - GET /api/channels/{id}, PUT, DELETE con scoping por org_id.
 - Unicidad por org_id: phone_number y credentials.phone_number_id no pueden repetirse dentro de la misma organización.
 
+
+## Notas de API (Gateway)
+
+- Paginación: `GET /api/conversations/{id}/messages` acepta `limit`, `offset` y `after_id` (cursor). Ordena por `created_at` si existe; si no, por `id`.
+- Marcar leído: `POST /api/conversations/{id}/messages/read` marca inbound como `read` (opcionalmente hasta `up_to_id`).
+- Rate limiting (dev): `RATE_LIMIT_ENABLED` y `RATE_LIMIT_PER_MIN` activan un límite por minuto en memoria para `send` y `convmsg`.
+- Endpoints dev: `POST /api/auth/dev-login`, `GET /api/me`.

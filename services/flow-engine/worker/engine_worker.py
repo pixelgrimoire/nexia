@@ -48,6 +48,8 @@ async def handle_message(msg_id: str, fields: dict):
 		payload = {"text": payload_raw}
 	# try to extract text from common WA structure
 	text = ""
+	# also try to extract contact phone (for replies)
+	contact_phone = None
 	# Common webhook path: entry->[0]->changes->[0]->value->messages->[0]->text->body
 	try:
 		entry = payload.get("entry", [])
@@ -57,7 +59,14 @@ async def handle_message(msg_id: str, fields: dict):
 				value = changes[0].get("value", {})
 				messages = value.get("messages", [])
 				if messages:
-					text = messages[0].get("text", {}).get("body", "")
+					m0 = messages[0]
+					text = m0.get("text", {}).get("body", "")
+					# for WhatsApp Cloud incoming, the sender's phone is in `from`
+					contact_phone = m0.get("from") or contact_phone
+				# also check value.contacts[0].wa_id if present
+				contacts = value.get("contacts", [])
+				if contacts:
+					contact_phone = contacts[0].get("wa_id") or contact_phone
 	except Exception:
 		pass
 	if not text:
@@ -74,10 +83,22 @@ async def handle_message(msg_id: str, fields: dict):
 		reply = "Gracias por tu mensaje. Un agente te responderá pronto."
 
 	# publish to outbox (so messaging-gateway will pick it)
-	# publish reply and keep original text in metadata for tracing
+	# include org_id/channel_id when provided by upstream (webhook enrichment)
 	try:
 		trace_id = str(uuid.uuid4())
-		out = {"channel_id": "wa_main", "to": payload.get("contact", {}).get("phone", "unknown"), "type": "text", "text": reply, "client_id": f"auto_{int(time.time()*1000)}", "orig_text": text, "trace_id": trace_id}
+		channel = fields.get("channel_id") or "wa_main"
+		to_phone = contact_phone or payload.get("contact", {}).get("phone", "unknown")
+		out = {
+			"channel_id": channel,
+			"to": to_phone,
+			"type": "text",
+			"text": reply,
+			"client_id": f"auto_{int(time.time()*1000)}",
+			"orig_text": text,
+			"trace_id": trace_id,
+		}
+		if fields.get("org_id"):
+			out["org_id"] = fields.get("org_id")
 		# ensure all values are strings for redis stream
 		redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
 		# log the published message with trace_id for observability

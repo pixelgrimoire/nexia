@@ -8,6 +8,7 @@ Resumen de las entidades principales y campos (vista lógica)
 - Contact: id, org_id, wa_id, phone, name, attributes(JSONB), tags[], consent, locale, timezone
 - Conversation: id, org_id, contact_id, channel_id, state, assignee, last_activity_at
 - Message: id, conversation_id, direction, type, content(JSONB), template_id, status, meta, client_id
+  - Campos adicionales: created_at
 - Template: id, org_id, name, language, category, body, variables, status
 - Flow: id, org_id, name, version, graph(JSON), status, created_by
 
