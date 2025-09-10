@@ -10,10 +10,10 @@ from sqlalchemy import Column, String
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import declarative_base
 
-TestBase = declarative_base()
+DBBase = declarative_base()
 
 
-class TestContact(TestBase):
+class ContactModel(DBBase):
     __tablename__ = "contacts"
     id = Column(String, primary_key=True)
     org_id = Column(String)
@@ -36,8 +36,8 @@ def client() -> Generator[TestClient, None, None]:
         import services.contacts.app.main as main  # noqa: E402
         from packages.common.db import SessionLocal, engine  # noqa: E402
 
-        main.Contact = TestContact
-        TestBase.metadata.create_all(bind=engine)
+        main.Contact = ContactModel
+        DBBase.metadata.create_all(bind=engine)
 
         def override_get_db():
             db = SessionLocal()

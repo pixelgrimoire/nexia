@@ -1,12 +1,31 @@
 import os, json, time, asyncio
 from fastapi import FastAPI, Header, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis import Redis
 from sqlalchemy import text
 from packages.common.db import engine
 
-app = FastAPI(title="NexIA API Gateway")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+	# Create tables if models exist -- minimal no-op to ensure engine is importable
+	try:
+		with engine.begin() as conn:
+			conn.execute(text("""
+			-- Tables are created elsewhere; this is a no-op placeholder to ensure engine is importable
+			"""))
+	except Exception:
+		# ignore DB errors in dev when Postgres isn't available yet
+		pass
+	yield
+
+
+app = FastAPI(title="NexIA API Gateway", lifespan=lifespan)
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
+
 
 class SendMessage(BaseModel):
 	channel_id: str
@@ -16,25 +35,20 @@ class SendMessage(BaseModel):
 	template: dict | None = None
 	client_id: str | None = None
 
-@app.on_event("startup")
-def init_db():
-	# Create tables if models exist -- keep minimal to avoid forcing migrations here
-	try:
-		with engine.begin() as conn:
-			conn.execute(text("""
-			-- Tables are created elsewhere; this is a no-op placeholder to ensure engine is importable
-			"""))
-	except Exception:
-		# ignore DB errors in dev when Postgres isn't available yet
-		pass
+# Startup logic is handled by the lifespan handler defined above
 
 @app.get("/api/healthz")
 async def healthz():
 	return {"ok": True, "ts": time.time()}
 
+
 @app.post("/api/messages/send")
 async def send_message(body: SendMessage, authorization: str | None = Header(None)):
-	payload = body.dict()
+	# Support both Pydantic v1 (dict) and v2 (model_dump)
+	if hasattr(body, "model_dump"):
+		payload = body.model_dump()
+	else:
+		payload = body.dict()
 	payload.setdefault("client_id", f"cli_{int(time.time()*1000)}")
 	# Publish to outbox stream for messaging-gateway
 	try:
@@ -44,9 +58,8 @@ async def send_message(body: SendMessage, authorization: str | None = Header(Non
 		return {"queued": False, "reason": "redis-unavailable"}
 	return {"queued": True, "client_id": payload["client_id"]}
 
-# SSE inbox stream using sse-starlette-style EventSourceResponse
-from sse_starlette.sse import EventSourceResponse
 
+# SSE inbox stream using sse-starlette-style EventSourceResponse
 @app.get("/api/inbox/stream")
 async def inbox_stream(request: Request):
 	async def event_gen():
@@ -67,4 +80,9 @@ async def inbox_stream(request: Request):
 						yield {"event": "message", "id": msg_id, "data": data}
 			except Exception:
 				await asyncio.sleep(1)
+	# Import lazily to avoid import-time failure if sse_starlette isn't installed
+	try:
+		from sse_starlette.sse import EventSourceResponse
+	except Exception:
+		return JSONResponse({"error": "sse_starlette not installed"}, status_code=501)
 	return EventSourceResponse(event_gen())
