@@ -1,5 +1,7 @@
 import os, json, time, asyncio
-from fastapi import FastAPI, Header, Request
+from enum import Enum
+import jwt
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis import Redis
@@ -25,17 +27,47 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NexIA API Gateway", lifespan=lifespan)
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
-
+JWT_SECRET = os.getenv("JWT_SECRET", "devsecret")
 
 class SendMessage(BaseModel):
-	channel_id: str
-	to: str
-	type: str  # text|template
-	text: str | None = None
-	template: dict | None = None
-	client_id: str | None = None
+    channel_id: str
+    to: str
+    type: str  # text|template
+    text: str | None = None
+    template: dict | None = None
+    client_id: str | None = None
 
 # Startup logic is handled by the lifespan handler defined above
+
+
+class Role(str, Enum):
+    admin = "admin"
+    agent = "agent"
+
+
+def require_roles(*roles: Role):
+    async def checker(request: Request):
+        user = getattr(request.state, "user", None)
+        if not user or user.get("role") not in [r.value for r in roles]:
+            raise HTTPException(status_code=403, detail="forbidden")
+        return user
+    return Depends(checker)
+
+
+@app.middleware("http")
+async def jwt_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/healthz"):
+        return await call_next(request)
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    token = auth.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except Exception:
+        return JSONResponse({"detail": "invalid-token"}, status_code=401)
+    request.state.user = payload
+    return await call_next(request)
 
 @app.get("/api/healthz")
 async def healthz():
@@ -43,20 +75,20 @@ async def healthz():
 
 
 @app.post("/api/messages/send")
-async def send_message(body: SendMessage, authorization: str | None = Header(None)):
-	# Support both Pydantic v1 (dict) and v2 (model_dump)
-	if hasattr(body, "model_dump"):
-		payload = body.model_dump()
-	else:
-		payload = body.dict()
-	payload.setdefault("client_id", f"cli_{int(time.time()*1000)}")
-	# Publish to outbox stream for messaging-gateway
-	try:
-		redis.xadd("nf:outbox", payload)
-	except Exception:
-		# in case redis is unavailable, return a useful response
-		return {"queued": False, "reason": "redis-unavailable"}
-	return {"queued": True, "client_id": payload["client_id"]}
+async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent)):
+    # Support both Pydantic v1 (dict) and v2 (model_dump)
+    if hasattr(body, "model_dump"):
+        payload = body.model_dump()
+    else:
+        payload = body.dict()
+    payload.setdefault("client_id", f"cli_{int(time.time()*1000)}")
+    # Publish to outbox stream for messaging-gateway
+    try:
+        redis.xadd("nf:outbox", payload)
+    except Exception:
+        # in case redis is unavailable, return a useful response
+        return {"queued": False, "reason": "redis-unavailable"}
+    return {"queued": True, "client_id": payload["client_id"]}
 
 
 # SSE inbox stream using sse-starlette-style EventSourceResponse
