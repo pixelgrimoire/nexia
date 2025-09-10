@@ -22,7 +22,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-precommit-${{ hashFiles('services/flow-engine/requirements.txt','services/messaging-gateway/requirements.txt') }}
+          key: ${{ runner.os }}-pip-precommit-${{ hashFiles('services/flow-engine/requirements.txt','services/messaging-gateway/requirements.txt','services/contacts/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -51,14 +51,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('services/flow-engine/requirements.txt','services/messaging-gateway/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('services/flow-engine/requirements.txt','services/messaging-gateway/requirements.txt','services/contacts/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
       - name: Install repo venv and deps
         run: |
           python -m venv .venv
-          . .venv/bin/activate; python -m pip install --upgrade pip; pip install -r services/flow-engine/requirements.txt; pip install -r services/messaging-gateway/requirements.txt; pip install pre-commit
+          . .venv/bin/activate; python -m pip install --upgrade pip; pip install -r services/flow-engine/requirements.txt; pip install -r services/messaging-gateway/requirements.txt; pip install -r services/contacts/requirements.txt; pip install pre-commit
 
       - name: Run make ci
         run: |

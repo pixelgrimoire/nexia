@@ -7,5 +7,6 @@ if [ ! -d ".venv" ]; then
 fi
 .venv/bin/pip install --upgrade pip setuptools
 .venv/bin/pip install -r services/flow-engine/requirements.txt
-.venv/bin/pip install -r services/messaging-gateway/requirements.txt || true
+.venv/bin/pip install -r services/messaging-gateway/requirements.txt
+.venv/bin/pip install -r services/contacts/requirements.txt
 echo "Bootstrap complete"
