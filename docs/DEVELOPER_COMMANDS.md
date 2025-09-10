@@ -9,6 +9,7 @@ make bootstrap   # create .venv and install deps
 make test        # run duplicate-test checker and pytest
 make check       # run duplicate-test checker only
 make ci          # runs duplicate-test checker + pytest (CI-like)
+make migrate     # apply Alembic migrations to DATABASE_URL
 ```
 ci-local (POSIX, Docker required)
 --------------------------------
@@ -64,6 +65,22 @@ POSIX:
 pip install --user pre-commit
 pre-commit install
 ```
+
+Migrations
+----------
+The repo includes Alembic migrations targeting `packages.common.models.Base`.
+
+POSIX:
+```sh
+./scripts/migrate.sh
+```
+
+Windows (PowerShell):
+```powershell
+./scripts/migrate.ps1
+```
+
+Ensure `DATABASE_URL` points to your Postgres instance (see `.env.example`).
 
 Windows (PowerShell):
 ```powershell

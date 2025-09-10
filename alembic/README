@@ -1,0 +1,5 @@
+Alembic migrations for NexIA
+
+Target metadata: packages.common.models.Base.metadata
+
+Use the repo virtualenv for local operations.

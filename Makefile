@@ -37,3 +37,7 @@ ci:
 ci-local:
 	@echo "Running CI checks inside python:3.12-slim container (requires Docker)"
 	docker run --rm -v "$(PWD)":/work -w /work python:3.12-slim bash -lc "set -e; python -m venv .venv; . .venv/bin/activate; python -m pip install --upgrade pip; pip install -r services/flow-engine/requirements.txt; pip install -r services/messaging-gateway/requirements.txt; pip install -r services/contacts/requirements.txt; pip install pre-commit pytest; make ci"
+
+.PHONY: migrate
+migrate:
+	. .venv/bin/activate; pip install -q -r requirements-dev.txt || true; alembic upgrade head

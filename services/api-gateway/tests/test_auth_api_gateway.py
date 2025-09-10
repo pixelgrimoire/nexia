@@ -24,8 +24,9 @@ def make_token(role: str) -> str:
 def client() -> TestClient:
     os.environ["DATABASE_URL"] = "sqlite://"
     os.environ["JWT_SECRET"] = "testsecret"
-    root = Path(__file__).resolve().parents[2]
-    module_path = root / "app" / "main.py"
+    # Point to the service directory (services/api-gateway)
+    service_root = Path(__file__).resolve().parents[1]
+    module_path = service_root / "app" / "main.py"
     spec = importlib.util.spec_from_file_location("api_gateway_main", module_path)
     main = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(main)
