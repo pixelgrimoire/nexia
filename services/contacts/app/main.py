@@ -8,13 +8,26 @@ from sqlalchemy.orm import Session
 from packages.common.db import SessionLocal, engine
 from packages.common.models import Contact
 
-app = FastAPI(title="NexIA Contacts")
+from contextlib import asynccontextmanager
+
+# Prepare a Pydantic v2 model_config if available; keep None for v1.
+try:
+    from pydantic import ConfigDict  # type: ignore
+
+    MODEL_CONFIG = ConfigDict(from_attributes=True)
+except Exception:
+    MODEL_CONFIG = None
 
 
-# Create tables on startup (no-op if already exist)
-@app.on_event("startup")
-def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure the contacts table exists before the app accepts requests.
     Contact.__table__.create(bind=engine, checkfirst=True)
+    yield
+
+
+# Create the FastAPI app with a lifespan handler instead of on_event
+app = FastAPI(title="NexIA Contacts", lifespan=lifespan)
 
 
 def get_db():
@@ -56,8 +69,12 @@ class ContactUpdate(BaseModel):
 class ContactOut(ContactBase):
     id: str
 
-    class Config:
-        orm_mode = True
+    # Support both Pydantic v2 (model_config / ConfigDict) and v1 (Config.orm_mode)
+    if MODEL_CONFIG is not None:
+        model_config = MODEL_CONFIG
+    else:
+        class Config:  # type: ignore
+            orm_mode = True
 
 
 # Routes -------------------------------------------------------------------
@@ -100,7 +117,12 @@ def update_contact(contact_id: str, payload: ContactUpdate, db: Session = Depend
     contact = db.get(Contact, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="contact not found")
-    for field, value in payload.dict(exclude_unset=True).items():
+    # Use model_dump when running Pydantic v2, fall back to dict() for v1.
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump(exclude_unset=True)
+    else:
+        data = payload.dict(exclude_unset=True)
+    for field, value in data.items():
         setattr(contact, field, value)
     db.commit()
     db.refresh(contact)
