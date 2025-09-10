@@ -112,10 +112,15 @@ export async function listMessages(
   return apiFetch<Message[]>(`/api/conversations/${conversationId}/messages?${qs.toString()}`, {}, token);
 }
 
-export async function sendMessage(token: JWT, conversationId: string, body: { type: "text"; text: string; client_id?: string }) {
-  const idem = body.client_id || (typeof crypto !== "undefined" && (crypto as any).randomUUID ? (crypto as any).randomUUID() : `cli_${Date.now()}`);
+export type SendBodyText = { type: "text"; text: string; client_id?: string };
+export type SendBodyTemplate = { type: "template"; template: Record<string, unknown>; client_id?: string };
+export type SendBodyMedia = { type: "media"; media: { kind: "image" | "document" | "video" | "audio"; link: string; caption?: string }; client_id?: string };
+export type SendBody = SendBodyText | SendBodyTemplate | SendBodyMedia;
+
+export async function sendMessage(token: JWT, conversationId: string, body: SendBody) {
+  const idem = (body as any).client_id || (typeof crypto !== "undefined" && (crypto as any).randomUUID ? (crypto as any).randomUUID() : ("cli_" + Date.now()));
   const headers: HeadersInit = { "Idempotency-Key": idem };
-  return apiFetch<Message>(`/api/conversations/${conversationId}/messages`, { method: "POST", headers, body: JSON.stringify({ ...body, client_id: idem }) }, token);
+  return apiFetch<Message>("/api/conversations/" + conversationId + "/messages", { method: "POST", headers, body: JSON.stringify({ ...(body as any), client_id: idem }) }, token);
 }
 
 export async function markRead(token: JWT, conversationId: string, body?: { up_to_id?: string }) {
@@ -158,24 +163,39 @@ export async function deleteChannel(token: JWT, id: string) {
 export function subscribeInbox(token: JWT, onEvent: (data: string) => void) {
   const ctrl = new AbortController();
   const headers = new Headers({ Authorization: `Bearer ${token}`, Accept: "text/event-stream" });
-  fetch("/api/inbox/stream", { headers, signal: ctrl.signal }).then(async (res) => {
-    if (!res.body) return;
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      // Split SSE events on double newlines
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop() ?? "";
-      for (const chunk of parts) {
-        // extract last data: line
-        const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"));
-        if (dataLine) onEvent(dataLine.slice(5).trim());
+  (async () => {
+    try {
+      const res = await fetch("/api/inbox/stream", { headers, signal: ctrl.signal });
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Split SSE events on double newlines
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const chunk of parts) {
+          // extract last data: line
+          const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"));
+          if (dataLine) onEvent(dataLine.slice(5).trim());
+        }
+      }
+    } catch (err: any) {
+      // swallow abort errors; log others
+      if (!(err && err.name === "AbortError")) {
+        // eslint-disable-next-line no-console
+        console.error("SSE subscribe error", err);
       }
     }
-  });
-  return () => ctrl.abort();
+  })();
+  return () => {
+    try {
+      ctrl.abort();
+    } catch {
+      // ignore
+    }
+  };
 }

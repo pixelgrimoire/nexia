@@ -468,8 +468,10 @@ class ConversationUpdate(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    type: str  # text|template (MVP: text)
+    type: str  # text|template|media
     text: str | None = None
+    template: dict | None = None
+    media: dict | None = None  # {kind: image|document|video|audio, link: url, caption?: str}
     client_id: str | None = None
 
 
@@ -660,13 +662,37 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
                 return cached
     except Exception:
         pass
+    # validate and normalize by type
+    msg_type = body.type
+    if msg_type not in ("text", "template", "media"):
+        raise HTTPException(status_code=400, detail="invalid-type")
+    content: dict | None = None
+    tpl_json: str | None = None
+    media_json: str | None = None
+    if msg_type == "text":
+        if not body.text:
+            raise HTTPException(status_code=400, detail="text-required")
+        content = {"text": body.text}
+    elif msg_type == "template":
+        tpl = body.template
+        if not isinstance(tpl, dict) or not tpl.get("name"):
+            raise HTTPException(status_code=400, detail="template-invalid")
+        tpl_json = json.dumps(tpl)
+        content = {"template": tpl}
+    elif msg_type == "media":
+        media = body.media
+        if not isinstance(media, dict) or media.get("kind") not in ("image", "document", "video", "audio") or not media.get("link"):
+            raise HTTPException(status_code=400, detail="media-invalid")
+        media_json = json.dumps(media)
+        content = {"media": media}
+
     mid = str(uuid4())
     m = Message(
         id=mid,
         conversation_id=conv.id,
         direction="out",
-        type=body.type,
-        content={"text": body.text} if body.text else None,
+        type=msg_type,
+        content=content,
         client_id=body.client_id or f"cli_{int(time.time()*1000)}",
     )
     db.add(m)
@@ -680,19 +706,22 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
     except Exception:
         pass
     try:
-        redis.xadd(
-            "nf:outbox",
-            {
-                "channel_id": conv.channel_id,
-                "to": to_value,
-                "type": body.type,
-                "text": body.text or "",
-                "client_id": m.client_id,
-                "org_id": str(user.get("org_id", "")),
-                "requested_by": str(user.get("sub", "")),
-                "conversation_id": conv.id,
-            },
-        )
+        payload = {
+            "channel_id": conv.channel_id,
+            "to": to_value,
+            "type": msg_type,
+            "client_id": m.client_id,
+            "org_id": str(user.get("org_id", "")),
+            "requested_by": str(user.get("sub", "")),
+            "conversation_id": conv.id,
+        }
+        if msg_type == "text":
+            payload["text"] = body.text or ""
+        elif msg_type == "template" and tpl_json is not None:
+            payload["template"] = tpl_json
+        elif msg_type == "media" and media_json is not None:
+            payload["media"] = media_json
+        redis.xadd("nf:outbox", payload)
     except Exception:
         pass
 

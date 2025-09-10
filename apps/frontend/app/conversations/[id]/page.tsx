@@ -20,6 +20,12 @@ export default function ConversationDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [text, setText] = useState("");
+  const [msgType, setMsgType] = useState<"text" | "template" | "media">("text");
+  const [tplName, setTplName] = useState("");
+  const [tplLang, setTplLang] = useState("es");
+  const [mediaKind, setMediaKind] = useState<"image" | "document" | "video" | "audio">("image");
+  const [mediaLink, setMediaLink] = useState("");
+  const [mediaCaption, setMediaCaption] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
@@ -74,12 +80,23 @@ export default function ConversationDetailPage() {
 
   const onSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !convId || !text.trim()) return;
+    if (!token || !convId) return;
     setSending(true);
     setError(null);
     try {
-      await sendMessage(token, convId, { type: "text", text: text.trim() });
-      setText("");
+      let payload: any;
+      if (msgType === "text") {
+        if (!text.trim()) throw new Error("Texto requerido");
+        payload = { type: "text", text: text.trim() };
+      } else if (msgType === "template") {
+        if (!tplName.trim()) throw new Error("Nombre de plantilla requerido");
+        payload = { type: "template", template: { name: tplName.trim(), language: { code: tplLang.trim() || "es" }, components: [] } };
+      } else {
+        if (!mediaLink.trim()) throw new Error("Link de media requerido");
+        payload = { type: "media", media: { kind: mediaKind, link: mediaLink.trim(), caption: mediaCaption || undefined } };
+      }
+      await sendMessage(token, convId, payload);
+      setText(""); setMediaLink(""); setMediaCaption("");
       await load();
       setToast({ msg: "Mensaje enviado", type: "success" });
     } catch (e: any) {
@@ -122,23 +139,39 @@ export default function ConversationDetailPage() {
             ))}
           </ul>
           </div>
-          <form onSubmit={onSend} className="flex gap-2">
-            <input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Escribe un mensaje…"
-              className="flex-1 border border-slate-300 rounded px-3 py-2"
-            />
-            <button
-              type="submit"
-              disabled={sending || !text.trim()}
-              className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60"
-            >
-              {sending ? "Enviando…" : "Enviar"}
-            </button>
-            <button type="button" onClick={load} className="px-3 py-2 rounded border border-slate-300">
-              Refrescar
-            </button>
+          <form onSubmit={onSend} className="space-y-2">
+            <div className="flex gap-2 items-center">
+              <select value={msgType} onChange={(e) => setMsgType(e.target.value as any)} className="border border-slate-300 rounded px-3 py-2">
+                <option value="text">texto</option>
+                <option value="template">plantilla</option>
+                <option value="media">media</option>
+              </select>
+              {msgType === "text" && (
+                <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Escribe un mensaje…" className="flex-1 border border-slate-300 rounded px-3 py-2" />
+              )}
+            </div>
+            {msgType === "template" && (
+              <div className="flex gap-2">
+                <input value={tplName} onChange={(e) => setTplName(e.target.value)} placeholder="nombre plantilla" className="flex-1 border border-slate-300 rounded px-3 py-2" />
+                <input value={tplLang} onChange={(e) => setTplLang(e.target.value)} placeholder="idioma (es)" className="w-32 border border-slate-300 rounded px-3 py-2" />
+              </div>
+            )}
+            {msgType === "media" && (
+              <div className="flex gap-2">
+                <select value={mediaKind} onChange={(e) => setMediaKind(e.target.value as any)} className="border border-slate-300 rounded px-3 py-2">
+                  <option value="image">image</option>
+                  <option value="document">document</option>
+                  <option value="video">video</option>
+                  <option value="audio">audio</option>
+                </select>
+                <input value={mediaLink} onChange={(e) => setMediaLink(e.target.value)} placeholder="https://..." className="flex-1 border border-slate-300 rounded px-3 py-2" />
+                <input value={mediaCaption} onChange={(e) => setMediaCaption(e.target.value)} placeholder="caption (opcional)" className="flex-1 border border-slate-300 rounded px-3 py-2" />
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button type="submit" disabled={sending || (msgType === 'text' && !text.trim()) || (msgType === 'template' && !tplName.trim()) || (msgType === 'media' && !mediaLink.trim())} className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60">{sending ? "Enviando…" : "Enviar"}</button>
+              <button type="button" onClick={load} className="px-3 py-2 rounded border border-slate-300">Refrescar</button>
+            </div>
           </form>
         </>
       )}
