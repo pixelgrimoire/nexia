@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   type JWT,
   listConversations,
@@ -12,6 +13,7 @@ import {
 } from "../lib/api";
 
 export default function ConversationsPage() {
+  const router = useRouter();
   const [token, setToken] = useState<JWT | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +59,11 @@ export default function ConversationsPage() {
   }, [token]);
 
   const hasToken = useMemo(() => Boolean(token), [token]);
+
+  useEffect(() => {
+    if (token === null) return; // resolving
+    if (!token) router.push("/auth/login");
+  }, [token, router]);
 
   const onCreateConv = async (e: React.FormEvent) => {
     e.preventDefault();

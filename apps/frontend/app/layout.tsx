@@ -1,11 +1,15 @@
 import type { ReactNode } from "react";
 import "./globals.css";
+import Topbar from "./components/Topbar";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es">
       <body className="min-h-screen bg-slate-50 text-slate-900">
-        <div className="container py-6">{children}</div>
+        <div className="container py-6">
+          <Topbar />
+          {children}
+        </div>
       </body>
     </html>
   );

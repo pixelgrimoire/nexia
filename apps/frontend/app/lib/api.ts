@@ -36,6 +36,36 @@ export async function getMe(token: JWT) {
   return apiFetch<Record<string, unknown>>("/api/me", {}, token);
 }
 
+// --- Auth real (register/login/refresh/logout) ---
+export async function authRegister(email: string, password: string, orgName: string, role: "admin" | "agent" = "admin") {
+  return apiFetch<{ access_token: string; refresh_token: string; token_type: string }>(
+    "/api/auth/register",
+    { method: "POST", body: JSON.stringify({ email, password, org_name: orgName, role }) }
+  );
+}
+
+export async function authLogin(email: string, password: string) {
+  return apiFetch<{ access_token: string; refresh_token: string; token_type: string }>(
+    "/api/auth/login",
+    { method: "POST", body: JSON.stringify({ email, password }) }
+  );
+}
+
+export async function authRefresh(refreshToken: string) {
+  return apiFetch<{ access_token: string; refresh_token: string; token_type: string }>(
+    "/api/auth/refresh",
+    { method: "POST", body: JSON.stringify({ refresh_token: refreshToken }) }
+  );
+}
+
+export async function authLogout(token: JWT, refreshToken?: string) {
+  return apiFetch<{ ok: boolean }>(
+    "/api/auth/logout",
+    { method: "POST", body: JSON.stringify({ refresh_token: refreshToken }) },
+    token
+  );
+}
+
 // --- Conversations ---
 export type Conversation = {
   id: string;
@@ -81,7 +111,9 @@ export async function listMessages(
 }
 
 export async function sendMessage(token: JWT, conversationId: string, body: { type: "text"; text: string; client_id?: string }) {
-  return apiFetch<Message>(`/api/conversations/${conversationId}/messages`, { method: "POST", body: JSON.stringify(body) }, token);
+  const idem = body.client_id || (typeof crypto !== "undefined" && (crypto as any).randomUUID ? (crypto as any).randomUUID() : `cli_${Date.now()}`);
+  const headers: HeadersInit = { "Idempotency-Key": idem };
+  return apiFetch<Message>(`/api/conversations/${conversationId}/messages`, { method: "POST", headers, body: JSON.stringify({ ...body, client_id: idem }) }, token);
 }
 
 export async function markRead(token: JWT, conversationId: string, body?: { up_to_id?: string }) {
