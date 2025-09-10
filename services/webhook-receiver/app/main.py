@@ -6,6 +6,8 @@ import logging
 from json import JSONDecodeError
 from fastapi import FastAPI, HTTPException, Request
 from redis import Redis
+from sqlalchemy import text
+from packages.common.db import SessionLocal
 
 app = FastAPI(title="NexIA Webhook Receiver")
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
@@ -49,10 +51,49 @@ async def receive(req: Request):
 			return {"ok": True, "warning": "redis-unavailable-invalid-json"}
 		return {"ok": True, "warning": "invalid-json"}
 
-	# Fan-out: inbox (SSE) and incoming flow
+	# Try enrich with org_id/channel_id via phone_number_id mapping
+	org_id = None
+	channel_id = None
 	try:
-		redis.xadd("nf:inbox", {"source": "wa", "payload": json.dumps(payload)})
-		redis.xadd("nf:incoming", {"source": "wa", "payload": json.dumps(payload)})
+		pnid = None
+		display = None
+		try:
+			entry = payload.get("entry", [])
+			if entry:
+				changes = entry[0].get("changes", [])
+				if changes:
+					value = changes[0].get("value", {})
+					meta = value.get("metadata", {})
+					pnid = meta.get("phone_number_id")
+					display = meta.get("display_phone_number")
+		except Exception:
+			pass
+		if pnid or display:
+			with SessionLocal() as db:
+				rows = db.execute(text("SELECT id, org_id, credentials, phone_number FROM channels"))
+				for r in rows:
+					row = dict(r._mapping)
+					creds = row.get("credentials") if isinstance(row.get("credentials"), dict) else None
+					if pnid and creds and creds.get("phone_number_id") == pnid:
+						channel_id = row.get("id")
+						org_id = row.get("org_id")
+						break
+					if display and row.get("phone_number") == display:
+						channel_id = row.get("id")
+						org_id = row.get("org_id")
+						break
+	except Exception:
+		logger.exception("channel lookup failed")
+
+	# Fan-out: inbox (SSE) and incoming flow with enrichment when available
+	out_common = {"source": "wa", "payload": json.dumps(payload)}
+	if org_id:
+		out_common["org_id"] = str(org_id)
+	if channel_id:
+		out_common["channel_id"] = str(channel_id)
+	try:
+		redis.xadd("nf:inbox", out_common)
+		redis.xadd("nf:incoming", out_common)
 	except Exception:
 		logger.exception("redis unavailable when enqueuing parsed payload")
 		return {"ok": True, "warning": "redis-unavailable"}
