@@ -121,11 +121,7 @@ def update_contact(contact_id: str, payload: ContactUpdate, db: Session = Depend
     if hasattr(payload, "model_dump"):
         data = payload.model_dump(exclude_unset=True)
     else:
-        # Support both Pydantic v1 (dict) and v2 (model_dump)
-        if hasattr(payload, "model_dump"):
-            data = payload.model_dump(exclude_unset=True)
-        else:
-            data = payload.dict(exclude_unset=True)
+        data = payload.dict(exclude_unset=True)
     for field, value in data.items():
         setattr(contact, field, value)
     db.commit()
