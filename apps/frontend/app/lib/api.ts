@@ -139,6 +139,18 @@ export async function listChannels(token: JWT) {
   return apiFetch<Channel[]>("/api/channels", {}, token);
 }
 
+export async function getChannel(token: JWT, id: string) {
+  return apiFetch<Channel>(`/api/channels/${id}`, {}, token);
+}
+
+export async function updateChannel(token: JWT, id: string, body: { type?: string; mode?: string; status?: string; phone_number?: string; credentials?: Record<string, unknown> }) {
+  return apiFetch<Channel>(`/api/channels/${id}`, { method: "PUT", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteChannel(token: JWT, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }, token);
+}
+
 // --- SSE Inbox subscription (via fetch stream) ---
 // EventSource can't send Authorization headers; use fetch streaming instead.
 export function subscribeInbox(token: JWT, onEvent: (data: string) => void) {

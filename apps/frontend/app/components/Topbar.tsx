@@ -31,7 +31,11 @@ export default function Topbar() {
   };
   return (
     <header className="mb-4 flex items-center justify-between">
-      <Link href="/" className="font-semibold">NexIA</Link>
+      <nav className="flex items-center gap-4">
+        <Link href="/" className="font-semibold">NexIA</Link>
+        <Link href="/conversations" className="text-slate-700 hover:underline">Conversaciones</Link>
+        <Link href="/channels" className="text-slate-700 hover:underline">Canales</Link>
+      </nav>
       <div className="flex items-center gap-3 text-sm">
         {email ? <span className="text-slate-600">{email}</span> : <Link href="/auth/login" className="text-blue-700 underline">Login</Link>}
         <button onClick={onLogout} disabled={loading} className="px-2 py-1 rounded border border-slate-300">
@@ -42,4 +46,3 @@ export default function Topbar() {
     </header>
   );
 }
-
