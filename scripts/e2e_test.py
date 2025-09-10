@@ -78,12 +78,15 @@ def main():
         print("Error posting webhook:", err)
         sys.exit(3)
 
-    # small delay to allow workers to process
+    # wait for workers to process (poll up to ~30s)
     import time
-    time.sleep(1)
-
+    after = None
+    for _ in range(30):
+        after = xlen_nf_sent()
+        if after is not None and after > before:
+            break
+        time.sleep(1)
     print("Counting nf:sent (after) ...")
-    after = xlen_nf_sent()
     if after is None:
         sys.exit(4)
     print("nf:sent after:", after)
