@@ -74,16 +74,18 @@ export type Conversation = {
   channel_id: string;
   state?: string;
   assignee?: string;
+  unread?: number;
 };
 
 export async function createConversation(token: JWT, body: { contact_id: string; channel_id: string; assignee?: string; state?: string }) {
   return apiFetch<Conversation>("/api/conversations", { method: "POST", body: JSON.stringify(body) }, token);
 }
 
-export async function listConversations(token: JWT, params?: { state?: string; limit?: number }) {
+export async function listConversations(token: JWT, params?: { state?: string; limit?: number; include_unread?: boolean }) {
   const qs = new URLSearchParams();
   if (params?.state) qs.set("state", params.state);
   if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.include_unread) qs.set("include_unread", "true");
   return apiFetch<Conversation[]>(`/api/conversations?${qs.toString()}`, {}, token);
 }
 

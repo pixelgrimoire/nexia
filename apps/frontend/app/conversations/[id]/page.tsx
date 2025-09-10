@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useParams } from "next/navigation";
 import {
@@ -20,6 +20,7 @@ export default function ConversationDetailPage() {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setToken(localStorage.getItem("nexia_token") as JWT | null);
@@ -63,6 +64,12 @@ export default function ConversationDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, convId]);
 
+  // auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (!listRef.current) return;
+    listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [msgs.length]);
+
   const onSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !convId || !text.trim()) return;
@@ -88,6 +95,7 @@ export default function ConversationDetailPage() {
         <p>Cargando…</p>
       ) : (
         <>
+          <div ref={listRef} className="min-h-[240px] max-h-[60vh] overflow-auto border border-slate-200 rounded p-2">
           <ul className="list-none p-0 space-y-2">
             {msgs.map((m) => (
               <li key={m.id} className="flex items-start gap-2">
@@ -109,6 +117,7 @@ export default function ConversationDetailPage() {
               </li>
             ))}
           </ul>
+          </div>
           <form onSubmit={onSend} className="flex gap-2">
             <input
               value={text}

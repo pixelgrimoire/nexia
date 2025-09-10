@@ -33,6 +33,7 @@ export default function Topbar() {
     <header className="mb-4 flex items-center justify-between">
       <nav className="flex items-center gap-4">
         <Link href="/" className="font-semibold">NexIA</Link>
+        <Link href="/inbox" className="text-slate-700 hover:underline">Inbox</Link>
         <Link href="/conversations" className="text-slate-700 hover:underline">Conversaciones</Link>
         <Link href="/channels" className="text-slate-700 hover:underline">Canales</Link>
       </nav>

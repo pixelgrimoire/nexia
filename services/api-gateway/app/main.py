@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from redis import Redis
-from sqlalchemy import text
+from sqlalchemy import text, func, or_
 from sqlalchemy.orm import Session
 from packages.common.db import engine, SessionLocal
 from packages.common.models import Organization, User, Conversation, Message, Contact, Channel, RefreshToken
@@ -459,6 +459,7 @@ class ConversationOut(BaseModel):
     org_id: str
     state: str | None = None
     assignee: str | None = None
+    unread: int | None = None
 
 
 class ConversationUpdate(BaseModel):
@@ -522,12 +523,38 @@ def create_conversation(body: ConversationCreate, user: dict = require_roles(Rol
 
 
 @app.get("/api/conversations", response_model=list[ConversationOut])
-def list_conversations(state: str | None = None, limit: int = 50, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_conversations(state: str | None = None, limit: int = 50, include_unread: bool = False, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
     q = db.query(Conversation).filter(Conversation.org_id == user.get("org_id"))
     if state:
         q = q.filter(Conversation.state == state)
     rows = q.limit(min(limit, 200)).all()
-    return [ConversationOut(id=r.id, org_id=r.org_id, contact_id=r.contact_id, channel_id=r.channel_id, state=r.state, assignee=r.assignee) for r in rows]
+    out: list[ConversationOut] = []
+    for r in rows:
+        unread = None
+        if include_unread:
+            try:
+                unread = (
+                    db.query(func.count(Message.id))
+                    .filter(Message.conversation_id == r.id)
+                    .filter(Message.direction == "in")
+                    .filter(or_(Message.status != "read", Message.status.is_(None)))
+                    .scalar()
+                )
+                unread = int(unread or 0)
+            except Exception:
+                unread = 0
+        out.append(
+            ConversationOut(
+                id=r.id,
+                org_id=r.org_id,
+                contact_id=r.contact_id,
+                channel_id=r.channel_id,
+                state=r.state,
+                assignee=r.assignee,
+                unread=unread,
+            )
+        )
+    return out
 
 
 def _load_conv_for_org(db: Session, conv_id: str, org_id: str) -> Conversation | None:
