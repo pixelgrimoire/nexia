@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = '0004_create_refresh_tokens'
-down_revision = '0003_add_user_password_and_created_at'
+down_revision = '0003_user_pw_created_at'
 branch_labels = None
 depends_on = None
 
@@ -28,4 +28,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table('refresh_tokens')
-

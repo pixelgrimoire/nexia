@@ -474,12 +474,37 @@ class MessageCreate(BaseModel):
 
 @app.post("/api/conversations", response_model=ConversationOut)
 def create_conversation(body: ConversationCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    org_id = str(user.get("org_id"))
+    # Resolve contact: accept either an existing contact_id or a phone/wa_id; auto-create if missing
+    contact = None
+    try:
+        contact = db.get(Contact, body.contact_id)
+    except Exception:
+        contact = None
+    if not contact:
+        # treat provided value as phone/wa_id and look up within org
+        q = db.query(Contact).filter(Contact.org_id == org_id).filter((Contact.wa_id == body.contact_id) | (Contact.phone == body.contact_id))
+        contact = q.first()
+    if not contact:
+        # create a minimal contact
+        from uuid import uuid4 as _uuid4
+        val = body.contact_id
+        is_phone = bool(val and (val.isdigit() or val.startswith("+")))
+        contact = Contact(id=str(_uuid4()), org_id=org_id, wa_id=val if is_phone else None, phone=val if is_phone else None, name=None, attributes={})
+        db.add(contact)
+        db.commit()
+        db.refresh(contact)
+    # Ensure channel belongs to org
+    ch = db.get(Channel, body.channel_id)
+    if not ch or str(getattr(ch, "org_id", None)) != org_id:
+        raise HTTPException(status_code=404, detail="channel not found")
+    # Create conversation
     cid = str(uuid4())
     state = body.state or "open"
     conv = Conversation(
         id=cid,
-        org_id=user.get("org_id"),
-        contact_id=body.contact_id,
+        org_id=org_id,
+        contact_id=contact.id,
         channel_id=body.channel_id,
         state=state,
         assignee=body.assignee,
@@ -541,6 +566,8 @@ class MessageOut(BaseModel):
     type: str
     content: dict | None = None
     client_id: str | None = None
+    status: str | None = None
+    meta: dict | None = None
 
 
 @app.get("/api/conversations/{conv_id}/messages", response_model=list[MessageOut])
@@ -572,7 +599,18 @@ def list_messages(conv_id: str, limit: int = 100, offset: int = 0, after_id: str
     rows = q.limit(min(limit, 500)).all()
     out: list[MessageOut] = []
     for r in rows:
-        out.append(MessageOut(id=r.id, conversation_id=r.conversation_id, direction=r.direction, type=r.type, content=r.content, client_id=r.client_id))
+        out.append(
+            MessageOut(
+                id=r.id,
+                conversation_id=r.conversation_id,
+                direction=r.direction,
+                type=r.type,
+                content=r.content,
+                client_id=r.client_id,
+                status=getattr(r, "status", None),
+                meta=getattr(r, "meta", None),
+            )
+        )
     return out
 
 
@@ -631,7 +669,16 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
     except Exception:
         pass
 
-    out = MessageOut(id=m.id, conversation_id=m.conversation_id, direction=m.direction, type=m.type, content=m.content, client_id=m.client_id)
+    out = MessageOut(
+        id=m.id,
+        conversation_id=m.conversation_id,
+        direction=m.direction,
+        type=m.type,
+        content=m.content,
+        client_id=m.client_id,
+        status=getattr(m, "status", None),
+        meta=getattr(m, "meta", None),
+    )
     _set_idempotent_cached(idem_key, out.dict() if hasattr(out, 'dict') else out.model_dump())
     return out
 

@@ -4,3 +4,4 @@ redis==5.0.7
 python-dotenv==1.0.1
 sqlalchemy==2.0.32
 prometheus-client==0.20.0
+psycopg[binary]==3.2.10

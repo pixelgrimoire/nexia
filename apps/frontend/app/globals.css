@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal base styles */
+:root {
+  --bg: 248 250 252; /* slate-50 */
+  --fg: 15 23 42;    /* slate-900 */
+}
+
+html, body {
+  height: 100%;
+}
+
+/* Utility helpers */
+.container {
+  @apply max-w-6xl mx-auto px-4;
+}
+

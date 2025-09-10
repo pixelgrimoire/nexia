@@ -146,20 +146,45 @@ async def process_message(msg_id: str, fields: dict):
                         .first()
                     )
             if conv:
-                # persist message row
-                db_msg = DBMessage(
-                    id=str(uuid.uuid4()),
-                    conversation_id=conv.id,
-                    direction='out',
-                    type=fields.get('type') or 'text',
-                    content={'text': text} if text else None,
-                    template_id=None,
-                    status=None,
-                    meta={'trace_id': fields.get('trace_id'), 'wa_msg_id': result.get('wa_msg_id')} if (fields.get('trace_id') or result.get('wa_msg_id')) else None,
-                    client_id=client_id,
-                )
-                db.add(db_msg)
-                db.commit()
+                # de-duplicate on client_id when available: if API already persisted an outgoing message
+                # for this conversation with the same client_id, update metadata instead of inserting another row.
+                existing = None
+                if client_id:
+                    try:
+                        existing = (
+                            db.query(DBMessage)
+                            .filter(DBMessage.conversation_id == conv.id)
+                            .filter(DBMessage.client_id == client_id)
+                            .first()
+                        )
+                    except Exception:
+                        existing = None
+                if existing:
+                    meta = existing.meta or {}
+                    if fields.get('trace_id'):
+                        meta['trace_id'] = fields.get('trace_id')
+                    if result.get('wa_msg_id'):
+                        meta['wa_msg_id'] = result.get('wa_msg_id')
+                    existing.meta = meta if meta else None
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                else:
+                    # persist new message row
+                    db_msg = DBMessage(
+                        id=str(uuid.uuid4()),
+                        conversation_id=conv.id,
+                        direction='out',
+                        type=fields.get('type') or 'text',
+                        content={'text': text} if text else None,
+                        template_id=None,
+                        status=None,
+                        meta={'trace_id': fields.get('trace_id'), 'wa_msg_id': result.get('wa_msg_id')} if (fields.get('trace_id') or result.get('wa_msg_id')) else None,
+                        client_id=client_id,
+                    )
+                    db.add(db_msg)
+                    db.commit()
     except Exception:
         logger.exception("persist outbound failed")
 

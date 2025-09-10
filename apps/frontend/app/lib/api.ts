@@ -64,6 +64,8 @@ export type Message = {
   type: string;
   content?: Record<string, unknown> | null;
   client_id?: string | null;
+  status?: string | null;
+  meta?: Record<string, unknown> | null;
 };
 
 export async function listMessages(

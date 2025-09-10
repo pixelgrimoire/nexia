@@ -46,6 +46,21 @@ make down     # docker compose down -v
 make logs     # logs -f --tail=200
 make ps       # estado de contenedores
 make smoke    # prueba E2E (webhook -> engine -> outbox -> sent)
+
+## Frontend (Next.js)
+
+- Puerto local: 3000 (expuesto por docker-compose)
+- Rewrites de `/api/*` hacia el API Gateway usando `API_GATEWAY_URL` (en docker: `http://api-gateway:8000`)
+- Desarrollo fuera de Docker (opcional):
+
+```bash
+cd apps/frontend
+npm i
+echo "API_GATEWAY_URL=http://localhost:8000" > .env.local
+npm run dev
+```
+
+Luego abre `http://localhost:3000` y usa Login (dev) para obtener token.
 ```
 
 ## Notas

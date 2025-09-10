@@ -18,7 +18,7 @@ export default function LoginPage() {
       localStorage.setItem("nexia_token", access_token);
       // sanity check
       await getMe(access_token);
-      location.assign("/inbox");
+      location.assign("/conversations");
     } catch (err: any) {
       setError(err?.message || "Error de autenticación");
     } finally {
@@ -27,29 +27,47 @@ export default function LoginPage() {
   };
 
   return (
-    <main style={{ maxWidth: 420, margin: "40px auto" }}>
-      <h1>Login (dev)</h1>
-      <form onSubmit={onSubmit}>
-        <label>
-          Email
-          <input value={email} onChange={(e) => setEmail(e.target.value)} required style={{ display: "block", width: "100%", marginBottom: 8 }} />
-        </label>
-        <label>
-          Organización
-          <input value={org} onChange={(e) => setOrg(e.target.value)} required style={{ display: "block", width: "100%", marginBottom: 8 }} />
-        </label>
-        <label>
-          Rol
-          <select value={role} onChange={(e) => setRole(e.target.value as any)} style={{ display: "block", width: "100%", marginBottom: 16 }}>
+    <main className="max-w-md mx-auto mt-10 space-y-4">
+      <h1 className="text-2xl font-semibold">Login (dev)</h1>
+      <form onSubmit={onSubmit} className="space-y-3">
+        <div>
+          <label className="block text-sm font-medium">Email</label>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="mt-1 block w-full border border-slate-300 rounded px-3 py-2"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium">Organización</label>
+          <input
+            value={org}
+            onChange={(e) => setOrg(e.target.value)}
+            required
+            className="mt-1 block w-full border border-slate-300 rounded px-3 py-2"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium">Rol</label>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as any)}
+            className="mt-1 block w-full border border-slate-300 rounded px-3 py-2"
+          >
             <option value="admin">admin</option>
             <option value="agent">agent</option>
           </select>
-        </label>
-        <button type="submit" disabled={loading}>
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60"
+        >
           {loading ? "Entrando..." : "Entrar"}
         </button>
       </form>
-      {error && <p style={{ color: "red" }}>{error}</p>}
+      {error && <p className="text-red-600">{error}</p>}
     </main>
   );
 }

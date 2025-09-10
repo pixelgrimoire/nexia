@@ -18,6 +18,12 @@ services:
 
   frontend:
     build: ./apps/frontend
+    environment:
+      - API_GATEWAY_URL=http://api-gateway:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
 
   api-gateway:
     build:
@@ -26,6 +32,8 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://nf_user:nf_pass@postgres:5432/nexia
+    ports:
+      - "8000:8000"
 
   webhook-receiver:
     build:
@@ -35,6 +43,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - WHATSAPP_APP_SECRET=dev_secret
       - WHATSAPP_VERIFY_TOKEN=change-me
+    ports:
+      - "8001:8000"
 
   messaging-gateway:
     build:
@@ -48,7 +58,7 @@ services:
     build:
       context: .
       dockerfile: services/messaging-gateway/Dockerfile
-    command: ["python", "worker/send_worker.py"]
+    command: ["python", "-m", "worker.send_worker"]
     environment:
       - REDIS_URL=redis://redis:6379/0
       - WHATSAPP_FAKE_MODE=true
@@ -66,7 +76,7 @@ services:
     build:
       context: .
       dockerfile: services/flow-engine/Dockerfile
-    command: ["python", "worker/engine_worker.py"]
+    command: ["python", "-m", "worker.engine_worker"]
     environment:
       - REDIS_URL=redis://redis:6379/0
     depends_on:
