@@ -8,6 +8,7 @@ import {
   listChannels,
   createChannel,
 } from "../lib/api";
+import Toast from "../components/Toast";
 
 export default function ChannelsPage() {
   const router = useRouter();
@@ -21,6 +22,7 @@ export default function ChannelsPage() {
   const [pnid, setPnid] = useState("");
   const [status, setStatus] = useState("active");
   const [creating, setCreating] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
     const t = localStorage.getItem("nexia_token") as JWT | null;
@@ -70,6 +72,7 @@ export default function ChannelsPage() {
       setChannels(data);
       setPhone("");
       setPnid("");
+      setToast({ msg: "Canal creado", type: "success" });
     } catch (e: any) {
       setError(e?.message || "Error creando canal");
     } finally {
@@ -125,7 +128,7 @@ export default function ChannelsPage() {
           </section>
         </div>
       )}
+      <Toast message={toast?.msg || null} type={toast?.type} onClose={() => setToast(null)} />
     </main>
   );
 }
-

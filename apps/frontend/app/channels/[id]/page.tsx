@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { type JWT, type Channel, getChannel, updateChannel, deleteChannel } from "../../lib/api";
+import Toast from "../../components/Toast";
 
 export default function ChannelEditPage() {
   const router = useRouter();
@@ -17,6 +18,7 @@ export default function ChannelEditPage() {
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
     const t = localStorage.getItem("nexia_token") as JWT | null;
@@ -54,8 +56,10 @@ export default function ChannelEditPage() {
         credentials: pnid.trim() ? { phone_number_id: pnid.trim() } : {},
       });
       setChannel(updated);
+      setToast({ msg: "Canal guardado", type: "success" });
     } catch (e: any) {
       setError(e?.message || "Error guardando canal");
+      setToast({ msg: "Error guardando canal", type: "error" });
     } finally {
       setSaving(false);
     }
@@ -105,7 +109,7 @@ export default function ChannelEditPage() {
           </div>
         </form>
       )}
+      <Toast message={toast?.msg || null} type={toast?.type} onClose={() => setToast(null)} />
     </main>
   );
 }
-

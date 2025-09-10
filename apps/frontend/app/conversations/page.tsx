@@ -39,7 +39,7 @@ export default function ConversationsPage() {
       setError(null);
       try {
         const [cList, chList] = await Promise.all([
-          listConversations(token, { limit: 50 }),
+          listConversations(token, { limit: 50, include_unread: true }),
           listChannels(token),
         ]);
         if (!cancelled) {
@@ -129,6 +129,9 @@ export default function ConversationsPage() {
                   <span className="ml-2 text-slate-600 text-sm">
                     {c.assignee ? `— ${c.assignee}` : null} {c.state ? `(${c.state})` : null}
                   </span>
+                  {typeof c.unread === "number" && c.unread > 0 && (
+                    <span className="ml-2 px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs align-middle">{c.unread} sin leer</span>
+                  )}
                 </li>
               ))}
             </ul>

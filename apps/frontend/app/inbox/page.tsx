@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Toast from "../components/Toast";
 import {
   type JWT,
   type Conversation,
@@ -19,6 +20,7 @@ export default function InboxPage() {
   const [stateFilter, setStateFilter] = useState<string>("");
   const [q, setQ] = useState("");
   const stopRef = useRef<null | (() => void)>(null);
+  const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   const hasToken = useMemo(() => Boolean(token), [token]);
 
@@ -68,6 +70,7 @@ export default function InboxPage() {
     try {
       await markRead(token, id, {});
       await load(token);
+      setToast({ msg: "Marcado como leído", type: "success" });
     } catch (e) {
       // ignore
     }
@@ -107,6 +110,7 @@ export default function InboxPage() {
           ))}
         </ul>
       )}
+      <Toast message={toast?.msg || null} type={toast?.type} onClose={() => setToast(null)} />
     </main>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import Toast from "../../components/Toast";
 import { useRouter } from "next/navigation";
 import { useParams } from "next/navigation";
 import {
@@ -21,6 +22,7 @@ export default function ConversationDetailPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
     setToken(localStorage.getItem("nexia_token") as JWT | null);
@@ -79,8 +81,10 @@ export default function ConversationDetailPage() {
       await sendMessage(token, convId, { type: "text", text: text.trim() });
       setText("");
       await load();
+      setToast({ msg: "Mensaje enviado", type: "success" });
     } catch (e: any) {
       setError(e?.message || "Error enviando");
+      setToast({ msg: "Error enviando", type: "error" });
     } finally {
       setSending(false);
     }
@@ -138,6 +142,7 @@ export default function ConversationDetailPage() {
           </form>
         </>
       )}
+      <Toast message={toast?.msg || null} type={toast?.type} onClose={() => setToast(null)} />
     </main>
   );
 }
