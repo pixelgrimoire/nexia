@@ -54,3 +54,19 @@ pre-commit install
 ```
 
 Once installed, the duplicate-test check runs automatically on commit; CI also runs the same check.
+
+Additional service dependencies
+
+Windows (PowerShell):
+
+```powershell
+# Contacts service (required for its tests)
+.\\.venv\\Scripts\\pip.exe install -r services/contacts/requirements.txt
+```
+
+POSIX/macOS:
+
+```bash
+# Contacts service (required for its tests)
+./.venv/bin/pip install -r services/contacts/requirements.txt
+```

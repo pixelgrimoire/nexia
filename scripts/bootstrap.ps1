@@ -14,6 +14,7 @@ try {
     & "$venv\Scripts\pip.exe" install --upgrade pip setuptools
     & "$venv\Scripts\pip.exe" install -r services/flow-engine/requirements.txt
     & "$venv\Scripts\pip.exe" install -r services/messaging-gateway/requirements.txt
+    & "$venv\Scripts\pip.exe" install -r services/contacts/requirements.txt
     try { & "$venv\Scripts\pip.exe" install -r services/webhook-receiver/requirements.txt } catch { Write-Host "No webhook-receiver requirements" }
 } catch {
     Write-Host "pip install failed: $_"
