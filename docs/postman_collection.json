@@ -1,0 +1,177 @@
+{
+  "info": {
+    "name": "NexIA API (MVP)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Colección Postman para probar el backend MVP de NexIA en modo FAKE o real. Usa variables {{host}} y {{access_token}}."
+  },
+  "variable": [
+    { "key": "host", "value": "http://localhost" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "channel_id", "value": "wa_main" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{host}}/api/healthz" }
+    },
+    {
+      "name": "Auth / Register",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"Secret123\",\n  \"org_name\": \"Acme\"\n}"
+        },
+        "url": "{{host}}/api/auth/register"
+      }
+    },
+    {
+      "name": "Auth / Login",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"Secret123\"\n}"
+        },
+        "url": "{{host}}/api/auth/login"
+      }
+    },
+    {
+      "name": "Auth / Refresh",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+        },
+        "url": "{{host}}/api/auth/refresh"
+      }
+    },
+    {
+      "name": "Auth / Logout",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{}" },
+        "url": "{{host}}/api/auth/logout"
+      }
+    },
+    {
+      "name": "Channels / Create (WA Cloud)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"type\": \"whatsapp\",\n  \"mode\": \"cloud\",\n  \"phone_number\": \"+5215550001111\",\n  \"credentials\": {\n    \"phone_number_id\": \"123456789012345\"\n  }\n}"
+        },
+        "url": "{{host}}/api/channels"
+      }
+    },
+    {
+      "name": "Channels / List",
+      "request": {
+        "method": "GET",
+        "header": [ { "key": "Authorization", "value": "Bearer {{access_token}}" } ],
+        "url": "{{host}}/api/channels"
+      }
+    },
+    {
+      "name": "Conversations / Create",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"contact_id\": \"ct_123\",\n  \"channel_id\": \"{{channel_id}}\"\n}" },
+        "url": "{{host}}/api/conversations"
+      }
+    },
+    {
+      "name": "Conversations / List Messages",
+      "request": {
+        "method": "GET",
+        "header": [ { "key": "Authorization", "value": "Bearer {{access_token}}" } ],
+        "url": {
+          "raw": "{{host}}/api/conversations/{{conv_id}}/messages?limit=50",
+          "host": [ "{{host}}" ],
+          "path": [ "api", "conversations", "{{conv_id}}", "messages" ],
+          "query": [ { "key": "limit", "value": "50" } ]
+        }
+      }
+    },
+    {
+      "name": "Conversations / Send Text",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{uuid}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"type\": \"text\",\n  \"text\": \"Hola!\"\n}" },
+        "url": "{{host}}/api/conversations/{{conv_id}}/messages"
+      }
+    },
+    {
+      "name": "Messages / Send Text (direct)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{uuid}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"channel_id\": \"{{channel_id}}\",\n  \"to\": \"5215550001111\",\n  \"type\": \"text\",\n  \"text\": \"Hola!\"\n}"
+        },
+        "url": "{{host}}/api/messages/send"
+      }
+    },
+    {
+      "name": "Messages / Send Template",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{uuid}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"channel_id\": \"{{channel_id}}\",\n  \"to\": \"5215550001111\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"welcome\",\n    \"language\": {\"code\": \"es\"}\n  }\n}"
+        },
+        "url": "{{host}}/api/messages/send"
+      }
+    },
+    {
+      "name": "Messages / Send Media",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{uuid}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"channel_id\": \"{{channel_id}}\",\n  \"to\": \"5215550001111\",\n  \"type\": \"media\",\n  \"media\": {\n    \"kind\": \"image\",\n    \"link\": \"https://example.com/demo.jpg\",\n    \"caption\": \"Hola\"\n  }\n}"
+        },
+        "url": "{{host}}/api/messages/send"
+      }
+    }
+  ]
+}
+

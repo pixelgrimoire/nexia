@@ -10,6 +10,11 @@ help:
 	@echo "  make precommit-install - install pre-commit locally"
 	@echo "  make precommit-install-venv - create .venv and install pre-commit into it, then enable hooks"
 	@echo "  make ci-local           - run the CI checks inside a transient python:3.12 Docker container (POSIX)"
+	@echo "  make up                 - docker compose up -d --build"
+	@echo "  make down               - docker compose down -v"
+	@echo "  make logs               - docker compose logs -f --tail=200"
+	@echo "  make ps                 - docker compose ps"
+	@echo "  make smoke              - run E2E smoke test (requires stack up)"
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -41,3 +46,19 @@ ci-local:
 .PHONY: migrate
 migrate:
 	. .venv/bin/activate; pip install -q -r requirements-dev.txt || true; alembic upgrade head
+
+.PHONY: up down logs ps smoke
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down -v
+
+logs:
+	docker compose logs -f --tail=200
+
+ps:
+	docker compose ps
+
+smoke:
+	python scripts/e2e_test.py

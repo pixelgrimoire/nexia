@@ -1,26 +1,50 @@
-# API Reference (esbozo)
+﻿# API Reference (esbozo)
 
 ## Autenticación
 - Bearer JWT para endpoints protegidos.
 
+### Auth real (MVP)
+
+Registro (crea organización + usuario):
+
+```bash
+curl -X POST http://$HOST/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"Secret123","org_name":"Acme"}'
+```
+
+Login:
+
+```bash
+curl -X POST http://$HOST/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"Secret123"}'
+```
+
+Refresh:
+
+```bash
+curl -X POST http://$HOST/api/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"<token>"}'
+```
+
+Logout (revoca refresh del usuario actual):
+
+```bash
+curl -X POST http://$HOST/api/auth/logout \
+  -H "Authorization: Bearer $ACCESS" -d '{}'
+```
+
 ## Endpoints públicos (ejemplos)
 - `GET /api/healthz` — estado del API Gateway.
-- `POST /api/messages/send` — encolar un mensaje (payload simplificado).
+- `POST /api/messages/send` — encolar un mensaje (text/template/media).
 - `GET /api/inbox/stream` — SSE para recibir eventos de inbox.
 - `GET /internal/status` — health/status interno (servicios).
 
-Documentación detallada por servicio en `docs/services/` (por crear).
-
-## Auth de desarrollo (MVP)
-- POST /api/auth/dev-login ? crea org/usuario y emite JWT (claims: org_id, role, sub).
-- GET /api/me ? devuelve los claims del JWT actual.
-
-Notas:
-- POST /api/messages/send enriquece la carga publicada a nf:outbox con org_id y requested_by del JWT.
-
 ## Conversations/Messages (MVP)
 
-- Crear conversaci�n
+- Crear conversación
 
 ```http
 POST /api/conversations
@@ -33,14 +57,14 @@ Content-Type: application/json
 }
 ```
 
-- Listar mensajes (paginaci�n y cursor)
+- Listar mensajes (paginación y cursor)
 
 ```http
 GET /api/conversations/{id}/messages?limit=50&offset=0&after_id=m_20
 Authorization: Bearer <JWT>
 ```
 
-- Enviar mensaje
+- Enviar mensaje (texto)
 
 ```http
 POST /api/conversations/{id}/messages
@@ -52,7 +76,33 @@ Content-Type: application/json
 }
 ```
 
-- Marcar como le�dos
+- Enviar plantilla (template)
+
+```bash
+curl -X POST http://$HOST/api/messages/send \
+  -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
+  -d '{
+    "channel_id":"wa_main",
+    "to":"5215550001111",
+    "type":"template",
+    "template": {"name":"welcome","language":{"code":"es"},"components":[]}
+  }'
+```
+
+- Enviar media
+
+```bash
+curl -X POST http://$HOST/api/messages/send \
+  -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
+  -d '{
+    "channel_id":"wa_main",
+    "to":"5215550001111",
+    "type":"media",
+    "media": {"kind":"image","link":"https://example.com/demo.jpg","caption":"Hola"}
+  }'
+```
+
+- Marcar como leídos
 
 ```http
 POST /api/conversations/{id}/messages/read
@@ -89,8 +139,8 @@ DELETE /api/channels/{id}
 ```
 
 Notas:
-- Env�os (`POST /api/conversations/{id}/messages`) se publican en `nf:outbox` enriquecidos con `org_id`, `requested_by`, `conversation_id`, `channel_id`, `to`.
-- `GET /api/inbox/stream` est� protegido por roles (`admin|agent`).
+- Envíos (`POST /api/conversations/{id}/messages`) se publican en `nf:outbox` enriquecidos con `org_id`, `requested_by`, `conversation_id`, `channel_id`, `to`.
+- `GET /api/inbox/stream` está protegido por roles (`admin|agent`).
 
 ## SSE Inbox
 
@@ -115,13 +165,13 @@ const stop = subscribeInbox(token, (data) => {
 
 ## Idempotency-Key
 
-- En env�os (`POST /api/messages/send`) y en mensajes de conversaci�n (`POST /api/conversations/{id}/messages`) puedes enviar la cabecera:
+- En envíos (`POST /api/messages/send`) y en mensajes de conversación (`POST /api/conversations/{id}/messages`) puedes enviar la cabecera:
 
 ```
 Idempotency-Key: 7b0f6b1a-2a8a-4b1a-9f2e-123456789abc
 ```
 
-Si se repite la misma clave para el mismo tenant y ruta, el Gateway devuelve 200 con el mismo body previo y no re-publica a la cola ni duplica efectos. Cache TTL aproximado: 10 minutos.
+Si se repite la misma clave para el mismo tenant y ruta, el Gateway devuelve 200 con el mismo body previo y no re‑publica a la cola ni duplica efectos. Cache TTL aproximado: 10 minutos.
 
 ## Rate limiting
 
@@ -131,6 +181,6 @@ Si se repite la misma clave para el mismo tenant y ruta, el Gateway devuelve 200
 
 ## Status interno
 
-- `GET /internal/status` muestra m�tricas simples:
+- `GET /internal/status` muestra métricas simples:
   - `rate_limit.limited`: cantidad de peticiones limitadas
   - `idempotency.reuse`: cantidad de reusos de idempotencia

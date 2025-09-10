@@ -13,6 +13,11 @@ switch ($Target) {
         Write-Host "  ci                        - run duplicate test checker and pytest using repo venv";
         Write-Host "  ci-local                  - run CI checks inside Docker (POSIX)";
         Write-Host "  ci-local-wsl              - run CI checks inside WSL (Windows)";
+        Write-Host "  up                        - docker compose up -d --build";
+        Write-Host "  down                      - docker compose down -v";
+        Write-Host "  logs                      - docker compose logs -f --tail=200";
+        Write-Host "  ps                        - docker compose ps";
+        Write-Host "  smoke                     - run E2E smoke test (requires stack up)";
         exit 0
     }
     'bootstrap' { .\scripts\bootstrap.ps1 }
@@ -123,6 +128,16 @@ switch ($Target) {
 
         Write-Host "Could not determine WSL path for the repo. Please run the CI checks manually inside WSL." -ForegroundColor Red
         exit 1
+    }
+    'up'   { docker compose up -d --build }
+    'down' { docker compose down -v }
+    'logs' { docker compose logs -f --tail=200 }
+    'ps'   { docker compose ps }
+    'smoke' { 
+        # prefer repo venv python
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+        $venvPy = Join-Path $scriptDir '.venv\Scripts\python.exe'
+        if (Test-Path $venvPy) { & $venvPy scripts/e2e_test.py } else { python scripts/e2e_test.py }
     }
     default     { & make $Target }
 }

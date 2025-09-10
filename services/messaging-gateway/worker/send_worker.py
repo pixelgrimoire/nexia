@@ -1,4 +1,4 @@
-import os, asyncio, time, logging, uuid
+import os, asyncio, time, logging, uuid, json
 
 import httpx
 from pythonjsonlogger import json as jsonlogger
@@ -22,6 +22,19 @@ async def process_message(msg_id: str, fields: dict):
     to = fields.get("to")
     text = fields.get("text") or (fields.get("body") or "")
     client_id = fields.get("client_id")
+    msg_type = fields.get("type") or "text"
+    tpl_obj = None
+    media_obj = None
+    if msg_type == "template" and fields.get("template"):
+        try:
+            tpl_obj = json.loads(fields.get("template")) if isinstance(fields.get("template"), str) else fields.get("template")
+        except Exception:
+            tpl_obj = None
+    if msg_type == "media" and fields.get("media"):
+        try:
+            media_obj = json.loads(fields.get("media")) if isinstance(fields.get("media"), str) else fields.get("media")
+        except Exception:
+            media_obj = None
     if FAKE:
         result = {"fake": True, "to": to, "text": text, "client_id": client_id, "ts": time.time()}
         if fields.get('orig_text'):
@@ -32,15 +45,28 @@ async def process_message(msg_id: str, fields: dict):
             result['org_id'] = fields.get('org_id')
         if fields.get('channel_id'):
             result['channel_id'] = fields.get('channel_id')
+        if msg_type == 'template' and tpl_obj:
+            result['template_name'] = tpl_obj.get('name')
+        if msg_type == 'media' and media_obj:
+            result['media_kind'] = media_obj.get('kind')
     else:
         url = f"https://graph.facebook.com/v20.0/{PHONE_ID}/messages"
         headers = {"Authorization": f"Bearer {TOKEN}"}
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "text",
-            "text": {"body": text},
-        }
+        payload = {"messaging_product": "whatsapp", "to": to}
+        if msg_type == "template" and tpl_obj:
+            payload["type"] = "template"
+            payload["template"] = tpl_obj
+        elif msg_type == "media" and media_obj:
+            kind = media_obj.get("kind")
+            link = media_obj.get("link")
+            caption = media_obj.get("caption")
+            payload["type"] = kind
+            payload[kind] = {"link": link}
+            if caption:
+                payload[kind]["caption"] = caption
+        else:
+            payload["type"] = "text"
+            payload["text"] = {"body": text}
         wa_msg_id = None
         for attempt in range(3):
             try:

@@ -124,9 +124,10 @@ def _set_idempotent_cached(key: Optional[str], payload: dict, ttl: int = 600) ->
 class SendMessage(BaseModel):
     channel_id: str
     to: str
-    type: str  # text|template
+    type: str  # text|template|media
     text: str | None = None
     template: dict | None = None
+    media: dict | None = None  # {kind: image|document|video|audio, link: url, caption?: str}
     client_id: str | None = None
 
 # Startup logic is handled by the lifespan handler defined above
@@ -188,6 +189,23 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
     else:
         payload = body.dict()
     payload.setdefault("client_id", f"cli_{int(time.time()*1000)}")
+    # validate type-specific fields and normalize nested dicts as JSON strings for Redis streams
+    msg_type = payload.get("type")
+    if msg_type not in ("text", "template", "media"):
+        raise HTTPException(status_code=400, detail="invalid-type")
+    if msg_type == "text":
+        if not payload.get("text"):
+            raise HTTPException(status_code=400, detail="text-required")
+    elif msg_type == "template":
+        tpl = payload.get("template")
+        if not isinstance(tpl, dict) or not tpl.get("name"):
+            raise HTTPException(status_code=400, detail="template-invalid")
+        payload["template"] = json.dumps(tpl)
+    elif msg_type == "media":
+        media = payload.get("media")
+        if not isinstance(media, dict) or media.get("kind") not in ("image", "document", "video", "audio") or not media.get("link"):
+            raise HTTPException(status_code=400, detail="media-invalid")
+        payload["media"] = json.dumps(media)
     # tenancy enrichment
     if user:
         payload.setdefault("org_id", str(user.get("org_id", "")))

@@ -1,4 +1,5 @@
 import os, json, time, asyncio, logging, uuid
+from prometheus_client import Counter, start_http_server
 from pythonjsonlogger import json as jsonlogger
 from redis import Redis
 
@@ -10,6 +11,22 @@ handler.setFormatter(formatter)
 logger = logging.getLogger("engine_worker")
 logger.addHandler(handler)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+
+# Metrics (opt-in via env var to avoid duplicate registration in tests)
+_METRICS_ENABLED = os.getenv("FLOW_ENGINE_METRICS", "false").lower() == "true"
+
+class _Noop:
+    def inc(self, *args, **kwargs):
+        return None
+
+if _METRICS_ENABLED:
+    ENGINE_PROCESSED = Counter('nexia_engine_incoming_processed_total', 'Incoming messages processed')
+    ENGINE_PUBLISHED = Counter('nexia_engine_outbox_published_total', 'Actions published to nf:outbox')
+    ENGINE_ERRORS = Counter('nexia_engine_errors_total', 'Engine errors')
+else:
+    ENGINE_PROCESSED = _Noop()
+    ENGINE_PUBLISHED = _Noop()
+    ENGINE_ERRORS = _Noop()
 
 def parse_kvs(kvs):
 	"""Normalize redis XREAD key/value payloads into a dict of strings.
@@ -30,6 +47,10 @@ def parse_kvs(kvs):
 		return fields
 	except Exception:
 		logger.exception("parse_kvs failed")
+		try:
+			ENGINE_ERRORS.inc()
+		except Exception:
+			pass
 		return None
 
 def classify_intent(text: str) -> str:
@@ -101,10 +122,19 @@ async def handle_message(msg_id: str, fields: dict):
 			out["org_id"] = fields.get("org_id")
 		# ensure all values are strings for redis stream
 		redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
+		try:
+			ENGINE_PUBLISHED.inc()
+		except Exception:
+			pass
 		# log the published message with trace_id for observability
 		logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
 	except Exception:
 		logger.exception("engine xadd failed")
+		try:
+			ENGINE_ERRORS.inc()
+		except Exception:
+			pass
+	return
 
 async def loop():
 	# start from the beginning in dev so backlog is processed
@@ -140,9 +170,24 @@ async def loop():
 						continue
 					last_id = msg_id
 					await handle_message(msg_id, fields)
+					try:
+						ENGINE_PROCESSED.inc()
+					except Exception:
+						pass
 		except Exception:
 			logger.exception("engine error")
+			try:
+				ENGINE_ERRORS.inc()
+			except Exception:
+				pass
 			await asyncio.sleep(1)
 
 if __name__ == "__main__":
+	# Start metrics HTTP server if a port is provided
+	try:
+		port = int(os.getenv("FLOW_ENGINE_METRICS_PORT", "0") or 0)
+		if port > 0 and _METRICS_ENABLED:
+			start_http_server(port)
+	except Exception:
+		pass
 	asyncio.run(loop())

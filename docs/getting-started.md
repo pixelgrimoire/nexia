@@ -1,5 +1,24 @@
 # Getting Started
 
+Quickstart (FAKE mode)
+----------------------
+
+Para validar el pipeline end‑to‑end rápidamente en local:
+
+```bash
+# 1) Levanta el stack (Traefik, Redis, servicios en modo FAKE)
+make up
+
+# 2) Ejecuta el smoke test E2E (simula un webhook firmado y espera un envío en nf:sent)
+make smoke
+
+# 3) (Opcional) Logs / estado
+make logs   # tail de todos los servicios
+make ps     # estado de contenedores
+```
+
+El smoke test pasa si nf:sent aumenta y el último evento contiene el marcador de prueba.
+
 Requisitos:
 - Docker y Docker Compose
 - Node.js (para desarrollo frontend opcional)
