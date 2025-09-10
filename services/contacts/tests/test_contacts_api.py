@@ -50,6 +50,9 @@ def client() -> Generator[TestClient, None, None]:
         with TestClient(main.app) as c:
             yield c
         main.app.dependency_overrides.clear()
+        # Dispose the engine to close any pooled connections so the
+        # temporary sqlite file can be removed on Windows.
+        engine.dispose()
 
 
 def test_crud_and_search(client: TestClient):
