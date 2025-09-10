@@ -574,7 +574,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 redis==5.0.7
 sqlalchemy==2.0.32
-psycopg[binary]==3.2.1
+psycopg[binary]==3.2.10
 sse-starlette==2.1.0
 python-dotenv==1.0.1
 ```
@@ -646,6 +646,8 @@ async def inbox_stream():
                     last_id = msg_id
     return EventSourceResponse(event_gen())
 ```
+
+Note: The repository implementation was later updated to use a FastAPI lifespan handler for startup logic and a Pydantic v1/v2-friendly pattern for payloads (using `model_dump()` when available). See `services/api-gateway/app/main.py` for the current code.
 
 ---
 
@@ -876,7 +878,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.32
-psycopg[binary]==3.2.1
+psycopg[binary]==3.2.10
 ```
 
 ### `services/contacts/app/main.py`
