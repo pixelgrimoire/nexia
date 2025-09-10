@@ -625,11 +625,15 @@ async def healthz():
 
 @app.post("/api/messages/send")
 async def send_message(body: SendMessage, authorization: str | None = Header(None)):
+  # Pydantic v2+: use model_dump(); fallback to .dict() for v1 compatibility
+  if hasattr(body, "model_dump"):
+    payload = body.model_dump()
+  else:
     payload = body.dict()
-    payload.setdefault("client_id", f"cli_{int(time.time()*1000)}")
-    # Publica en outbox para messaging-gateway
-    redis.xadd("nf:outbox", payload)
-    return {"queued": True, "client_id": payload["client_id"]}
+  payload.setdefault("client_id", f"cli_{int(time.time()*1000)}")
+  # Publica en outbox para messaging-gateway
+  redis.xadd("nf:outbox", payload)
+  return {"queued": True, "client_id": payload["client_id"]}
 
 # SSE de prueba para Inbox
 from sse_starlette.sse import EventSourceResponse
