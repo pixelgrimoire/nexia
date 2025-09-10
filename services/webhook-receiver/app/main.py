@@ -9,6 +9,7 @@ from redis import Redis
 from sqlalchemy import text
 from packages.common.db import SessionLocal
 from packages.common.models import Contact as _Contact, Conversation as _Conversation, Message as _Message
+from prometheus_client import CollectorRegistry, Counter, generate_latest, CONTENT_TYPE_LATEST
 
 app = FastAPI(title="NexIA Webhook Receiver")
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
@@ -21,10 +22,22 @@ Contact = _Contact
 Conversation = _Conversation
 Message = _Message
 
+# Prometheus metrics
+PROM_REGISTRY = CollectorRegistry()
+METRIC_VERIFY = Counter('nexia_webhook_verify_requests_total', 'Verification requests', registry=PROM_REGISTRY)
+METRIC_INVALID_SIG = Counter('nexia_webhook_invalid_signature_total', 'Invalid signature count', registry=PROM_REGISTRY)
+METRIC_INVALID_JSON = Counter('nexia_webhook_invalid_json_total', 'Invalid JSON payloads', registry=PROM_REGISTRY)
+METRIC_RECEIVED = Counter('nexia_webhook_received_total', 'Valid webhook payloads received', registry=PROM_REGISTRY)
+METRIC_REDIS_FAIL = Counter('nexia_webhook_redis_fail_total', 'Redis publish failures', registry=PROM_REGISTRY)
+
 
 @app.get("/api/webhooks/whatsapp")
 async def verify(mode: str, challenge: str, verify_token: str):
 	if mode == "subscribe" and verify_token == VERIFY_TOKEN:
+		try:
+			METRIC_VERIFY.inc()
+		except Exception:
+			pass
 		# Return numeric challenge as int per WhatsApp verification
 		try:
 			return int(challenge)
@@ -39,6 +52,10 @@ async def receive(req: Request):
 	body = await req.body()
 	expected = "sha256=" + hmac.new(APP_SECRET, body, hashlib.sha256).hexdigest()
 	if not hmac.compare_digest(sig, expected):
+		try:
+			METRIC_INVALID_SIG.inc()
+		except Exception:
+			pass
 		raise HTTPException(403, "Invalid signature")
 
 	raw_text = body.decode(errors="replace")
@@ -48,11 +65,19 @@ async def receive(req: Request):
 	try:
 		payload = json.loads(raw_text)
 	except JSONDecodeError:
+		try:
+			METRIC_INVALID_JSON.inc()
+		except Exception:
+			pass
 		logger.error("Invalid JSON webhook body (signature OK). Storing raw payload for inspection.")
 		try:
 			# store raw payload so it can be inspected manually
 			redis.xadd("nf:incoming", {"source": "wa", "payload": raw_text})
 		except Exception:
+			try:
+				METRIC_REDIS_FAIL.inc()
+			except Exception:
+				pass
 			logger.exception("redis unavailable when enqueuing invalid-json payload")
 			return {"ok": True, "warning": "redis-unavailable-invalid-json"}
 		return {"ok": True, "warning": "invalid-json"}
@@ -90,6 +115,12 @@ async def receive(req: Request):
 						break
 	except Exception:
 		logger.exception("channel lookup failed")
+
+	# Count received valid payload
+	try:
+		METRIC_RECEIVED.inc()
+	except Exception:
+		pass
 
 	# Fan-out: inbox (SSE) and incoming flow with enrichment when available
 	out_common = {"source": "wa", "payload": json.dumps(payload)}
@@ -156,7 +187,22 @@ async def receive(req: Request):
 		redis.xadd("nf:inbox", out_common)
 		redis.xadd("nf:incoming", out_common)
 	except Exception:
+		try:
+			METRIC_REDIS_FAIL.inc()
+		except Exception:
+			pass
 		logger.exception("redis unavailable when enqueuing parsed payload")
 		return {"ok": True, "warning": "redis-unavailable"}
 
 	return {"ok": True}
+
+
+@app.get("/metrics")
+async def metrics():
+	try:
+		data = generate_latest(PROM_REGISTRY)
+		from fastapi.responses import Response
+		return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+	except Exception:
+		from fastapi.responses import Response
+		return Response(content=b"", media_type=CONTENT_TYPE_LATEST)

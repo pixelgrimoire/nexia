@@ -57,3 +57,8 @@ Channels (WA Cloud / Bridge)
 - Marcar leído: `POST /api/conversations/{id}/messages/read` marca inbound como `read` (opcionalmente hasta `up_to_id`).
 - Rate limiting (dev): `RATE_LIMIT_ENABLED` y `RATE_LIMIT_PER_MIN` activan un límite por minuto en memoria para `send` y `convmsg`.
 - Endpoints dev: `POST /api/auth/dev-login`, `GET /api/me`.
+
+### Idempotency & Rate limit (Gateway)
+- Cabecera `Idempotency-Key` soportada en `POST /api/messages/send` y `POST /api/conversations/{id}/messages`.
+- Rate limit por minuto por tenant/ruta (Redis, con fallback en memoria).
+- `GET /internal/status` expone contadores de `limited` y `reuse`.

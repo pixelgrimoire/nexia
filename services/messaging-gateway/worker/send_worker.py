@@ -50,9 +50,18 @@ async def process_message(msg_id: str, fields: dict):
                 logger.info("whatsapp %s %s", resp.status_code, resp.text)
                 resp.raise_for_status()
                 wa_msg_id = resp.json().get("messages", [{}])[0].get("id")
+                # increment WhatsApp call counter
+                try:
+                    redis.incr("mgw:metrics:wa_calls_total")
+                except Exception:
+                    pass
                 break
             except Exception:
                 logger.exception("whatsapp send attempt %s failed", attempt + 1)
+                try:
+                    redis.incr("mgw:metrics:errors_total")
+                except Exception:
+                    pass
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
         result = {"fake": False, "to": to, "text": text, "client_id": client_id, "ts": time.time()}
@@ -71,11 +80,19 @@ async def process_message(msg_id: str, fields: dict):
         redis.xadd("nf:sent", {k: str(v) for k, v in result.items()})
     except Exception:
         logger.exception("send_worker xadd error")
+        try:
+            redis.incr("mgw:metrics:errors_total")
+        except Exception:
+            pass
     # log with trace_id when available for correlation
     if result.get('trace_id'):
         logger.info("processed %s", msg_id, extra={"trace_id": result.get('trace_id'), "to": result.get('to'), "client_id": result.get('client_id')})
     else:
         logger.info("processed %s %s", msg_id, result)
+    try:
+        redis.incr("mgw:metrics:processed_total")
+    except Exception:
+        pass
 
     # Best-effort persistence of outbound message when conversation context is available
     try:

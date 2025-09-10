@@ -112,3 +112,25 @@ const stop = subscribeInbox(token, (data) => {
 
 // later: stop();
 ```
+
+## Idempotency-Key
+
+- En envíos (`POST /api/messages/send`) y en mensajes de conversación (`POST /api/conversations/{id}/messages`) puedes enviar la cabecera:
+
+```
+Idempotency-Key: 7b0f6b1a-2a8a-4b1a-9f2e-123456789abc
+```
+
+Si se repite la misma clave para el mismo tenant y ruta, el Gateway devuelve 200 con el mismo body previo y no re-publica a la cola ni duplica efectos. Cache TTL aproximado: 10 minutos.
+
+## Rate limiting
+
+- Por tenant y ruta, ventana fija por minuto. Variables:
+  - `RATE_LIMIT_ENABLED` (on/off)
+  - `RATE_LIMIT_PER_MIN` (por defecto 60)
+
+## Status interno
+
+- `GET /internal/status` muestra métricas simples:
+  - `rate_limit.limited`: cantidad de peticiones limitadas
+  - `idempotency.reuse`: cantidad de reusos de idempotencia

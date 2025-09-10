@@ -1,16 +1,19 @@
-import os, json, time, asyncio
+import os, json, time, asyncio, uuid
 from uuid import uuid4
 from enum import Enum
 import jwt
 from fastapi import FastAPI, Request, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from packages.common.db import engine, SessionLocal
-from packages.common.models import Organization, User, Conversation, Message, Contact, Channel
+from packages.common.models import Organization, User, Conversation, Message, Contact, Channel, RefreshToken
+import bcrypt
 from collections import defaultdict
+from typing import Optional
+from prometheus_client import CollectorRegistry, Counter, generate_latest, CONTENT_TYPE_LATEST
 
 from contextlib import asynccontextmanager
 
@@ -41,6 +44,29 @@ except Exception:
 
 # simple in-process fixed-window rate limiter: key -> {window_ts: count}
 _rate_counters: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+# simple in-process metrics
+RL_LIMITED_COUNT = 0
+IDEMP_REUSE_COUNT = 0
+PROM_REGISTRY = CollectorRegistry()
+RL_LIMITED_METRIC = Counter('nexia_api_gateway_rate_limit_limited_total','Rate limited requests', registry=PROM_REGISTRY)
+IDEMP_REUSE_METRIC = Counter('nexia_api_gateway_idempotency_reuse_total','Idempotency reuse count', registry=PROM_REGISTRY)
+
+def _inc_rl_limited():
+    global RL_LIMITED_COUNT
+    RL_LIMITED_COUNT += 1
+    try:
+        RL_LIMITED_METRIC.inc()
+    except Exception:
+        pass
+
+
+def _inc_idemp_reuse():
+    global IDEMP_REUSE_COUNT
+    IDEMP_REUSE_COUNT += 1
+    try:
+        IDEMP_REUSE_METRIC.inc()
+    except Exception:
+        pass
 
 def reset_rate_limit():
     _rate_counters.clear()
@@ -48,15 +74,52 @@ def reset_rate_limit():
 def _enforce_rate_limit(key: str):
     if not RATE_LIMIT_ENABLED:
         return
+    # Prefer Redis fixed window per minute; fall back to in-memory
+    try:
+        now_min = int(time.time() // 60)
+        rkey = f"rl:{key}:{now_min}"
+        count = redis.incr(rkey)
+        if count == 1:
+            redis.expire(rkey, 60)
+        if count > RATE_LIMIT_PER_MIN:
+            _inc_rl_limited()
+            raise HTTPException(status_code=429, detail="rate-limit-exceeded")
+        return
+    except Exception:
+        pass
     now_min = int(time.time() // 60)
     bucket = _rate_counters[key]
-    # drop old windows to avoid growth
     for k in list(bucket.keys()):
         if k != now_min:
             bucket.pop(k, None)
     bucket[now_min] += 1
     if bucket[now_min] > RATE_LIMIT_PER_MIN:
+        _inc_rl_limited()
         raise HTTPException(status_code=429, detail="rate-limit-exceeded")
+
+
+def _get_idempotent_cached(key: Optional[str]) -> Optional[dict]:
+    if not key:
+        return None
+    try:
+        val = redis.get(key)
+        if val:
+            try:
+                return json.loads(val)
+            except Exception:
+                return None
+    except Exception:
+        return None
+    return None
+
+
+def _set_idempotent_cached(key: Optional[str], payload: dict, ttl: int = 600) -> None:
+    if not key:
+        return
+    try:
+        redis.set(key, json.dumps(payload), ex=ttl)
+    except Exception:
+        pass
 
 class SendMessage(BaseModel):
     channel_id: str
@@ -85,7 +148,7 @@ def require_roles(*roles: Role):
 
 @app.middleware("http")
 async def jwt_middleware(request: Request, call_next):
-    if request.url.path.startswith("/api/healthz") or request.url.path.startswith("/api/auth/dev-login"):
+    if request.url.path.startswith("/api/healthz") or request.url.path.startswith("/internal/status") or request.url.path.startswith("/api/auth/dev-login") or request.url.path.startswith("/api/auth/register") or request.url.path.startswith("/api/auth/login") or request.url.path.startswith("/api/auth/refresh"):
         return await call_next(request)
     auth = request.headers.get("Authorization")
     if not auth or not auth.startswith("Bearer "):
@@ -104,9 +167,21 @@ async def healthz():
 
 
 @app.post("/api/messages/send")
-async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent)):
+async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent), request: Request = None):
     # rate limit per org+route
     _enforce_rate_limit(f"send:{user.get('org_id','anon')}")
+    # idempotency
+    idem_key = None
+    try:
+        hdr = request.headers.get('Idempotency-Key') if request else None
+        if hdr:
+            idem_key = f"idemp:{user.get('org_id','')}:send:{hdr}"
+            cached = _get_idempotent_cached(idem_key)
+            if cached:
+                _inc_idemp_reuse()
+                return cached
+    except Exception:
+        pass
     # Support both Pydantic v1 (dict) and v2 (model_dump)
     if hasattr(body, "model_dump"):
         payload = body.model_dump()
@@ -123,7 +198,9 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
     except Exception:
         # in case redis is unavailable, return a useful response
         return {"queued": False, "reason": "redis-unavailable"}
-    return {"queued": True, "client_id": payload["client_id"]}
+    result = {"queued": True, "client_id": payload["client_id"]}
+    _set_idempotent_cached(idem_key, result)
+    return result
 
 
 # SSE inbox stream using sse-starlette-style EventSourceResponse
@@ -221,6 +298,131 @@ def current_user(request: Request):
 @app.get("/api/me")
 def me(user: dict = Depends(current_user)):
     return user
+
+
+# --- Auth real (MVP) --------------------------------------------------------
+
+class RegisterBody(BaseModel):
+    email: str
+    password: str
+    org_name: str
+    role: str | None = "admin"
+
+
+class LoginBody(BaseModel):
+    email: str
+    password: str
+
+
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+def _hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode()
+
+
+def _verify_password(pw: str, pw_hash: str | None) -> bool:
+    if not pw_hash:
+        return False
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), pw_hash.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def _mint_access(user: User, ttl_sec: int = 15 * 60) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": user.id,
+        "org_id": user.org_id,
+        "email": user.email,
+        "role": user.role,
+        "iat": now,
+        "exp": now + ttl_sec,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+from datetime import datetime, timedelta
+
+
+def _mint_refresh(user: User, db: Session, days: int = 7) -> str:
+    token = str(uuid.uuid4())
+    exp_dt = datetime.utcnow() + timedelta(days=days)
+    rt = RefreshToken(id=str(uuid.uuid4()), user_id=user.id, token=token, expires_at=exp_dt)
+    db.add(rt)
+    db.commit()
+    return token
+
+
+@app.post("/api/auth/register", response_model=TokenPair)
+def register(body: RegisterBody, db: Session = Depends(get_db)):
+    org = db.query(Organization).filter(Organization.name == body.org_name).first()
+    if not org:
+        org = Organization(id=str(uuid4()), name=body.org_name)
+        db.add(org)
+        db.commit()
+        db.refresh(org)
+    existing = db.query(User).filter(User.email == body.email).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="email-already-registered")
+    user = User(id=str(uuid4()), org_id=org.id, email=body.email, role=body.role or Role.admin.value, status="active", password_hash=_hash_password(body.password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    access = _mint_access(user)
+    refresh = _mint_refresh(user, db)
+    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}
+
+
+@app.post("/api/auth/login", response_model=TokenPair)
+def login(body: LoginBody, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user or not _verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="invalid-credentials")
+    access = _mint_access(user)
+    refresh = _mint_refresh(user, db)
+    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}
+
+
+class RefreshBody(BaseModel):
+    refresh_token: str
+
+
+@app.post("/api/auth/refresh", response_model=TokenPair)
+def refresh_token(body: RefreshBody, db: Session = Depends(get_db)):
+    rt = db.query(RefreshToken).filter(RefreshToken.token == body.refresh_token).first()
+    if not rt or getattr(rt, "revoked", "false") == "true":
+        raise HTTPException(status_code=401, detail="invalid-refresh")
+    user = db.query(User).filter(User.id == rt.user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid-refresh")
+    # rotate
+    rt.revoked = "true"
+    db.commit()
+    access = _mint_access(user)
+    new_refresh = _mint_refresh(user, db)
+    return {"access_token": access, "refresh_token": new_refresh, "token_type": "bearer"}
+
+
+class LogoutBody(BaseModel):
+    refresh_token: str | None = None
+
+
+@app.post("/api/auth/logout")
+def logout(body: LogoutBody, user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    if body.refresh_token:
+        rt = db.query(RefreshToken).filter(RefreshToken.token == body.refresh_token).first()
+        if rt:
+            rt.revoked = "true"
+            db.commit()
+        return {"ok": True}
+    db.query(RefreshToken).filter(RefreshToken.user_id == user.get("sub")).update({RefreshToken.revoked: "true"})
+    db.commit()
+    return {"ok": True}
 # ----------------------------------------------------------------------------
 # Conversations & Messages (Inbox MVP)
 
@@ -357,11 +559,24 @@ def list_messages(conv_id: str, limit: int = 100, offset: int = 0, after_id: str
 
 
 @app.post("/api/conversations/{conv_id}/messages", response_model=MessageOut)
-def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal()), request: Request = None):
     _enforce_rate_limit(f"convmsg:{user.get('org_id','anon')}")
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")
+    # idempotency check before mutating
+    idem_key = None
+    try:
+        hdr = request.headers.get('Idempotency-Key') if request else None
+        if hdr:
+            idem_key = f"idemp:{user.get('org_id','')}:convmsg:{conv_id}:{hdr}"
+            cached = _get_idempotent_cached(idem_key)
+            if cached:
+                _inc_idemp_reuse()
+                # response conforms to MessageOut; use cached directly
+                return cached
+    except Exception:
+        pass
     mid = str(uuid4())
     m = Message(
         id=mid,
@@ -398,7 +613,36 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
     except Exception:
         pass
 
-    return MessageOut(id=m.id, conversation_id=m.conversation_id, direction=m.direction, type=m.type, content=m.content, client_id=m.client_id)
+    out = MessageOut(id=m.id, conversation_id=m.conversation_id, direction=m.direction, type=m.type, content=m.content, client_id=m.client_id)
+    _set_idempotent_cached(idem_key, out.dict() if hasattr(out, 'dict') else out.model_dump())
+    return out
+
+
+@app.get("/internal/status")
+async def internal_status():
+    return {
+        "rate_limit": {
+            "enabled": RATE_LIMIT_ENABLED,
+            "per_min": RATE_LIMIT_PER_MIN,
+            "limited": RL_LIMITED_COUNT,
+        },
+        "idempotency": {
+            "reuse": IDEMP_REUSE_COUNT,
+        },
+        "service": {
+            "ts": time.time(),
+            "name": "api-gateway",
+        },
+    }
+
+
+@app.get("/metrics")
+async def metrics():
+    try:
+        data = generate_latest(PROM_REGISTRY)
+        return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+    except Exception:
+        return Response(content=b"", media_type=CONTENT_TYPE_LATEST)
 
 
 class MarkReadBody(BaseModel):

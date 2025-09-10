@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI
 from redis import Redis
+from prometheus_client import CollectorRegistry, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 
 app = FastAPI(title="NexIA Messaging Gateway")
@@ -45,4 +46,33 @@ async def metrics():
 @app.get("/healthz")
 async def healthz():
     return {"ok": True}
+
+
+@app.get("/metrics")
+async def metrics_prom():
+    reg = CollectorRegistry()
+    g_outbox = Gauge('nexia_mgw_nf_outbox_len', 'Length of nf:outbox stream', registry=reg)
+    g_sent = Gauge('nexia_mgw_nf_sent_len', 'Length of nf:sent stream', registry=reg)
+    g_fake = Gauge('nexia_mgw_fake_mode', '1 if FAKE mode enabled', registry=reg)
+    g_processed = Gauge('nexia_mgw_processed_total', 'Total processed messages (from Redis)', registry=reg)
+    g_errors = Gauge('nexia_mgw_errors_total', 'Total errors (from Redis)', registry=reg)
+    g_wa_calls = Gauge('nexia_mgw_wa_calls_total', 'Total WhatsApp API calls (from Redis)', registry=reg)
+    try:
+        g_outbox.set(redis.xlen("nf:outbox"))
+    except Exception:
+        g_outbox.set(0)
+    try:
+        g_sent.set(redis.xlen("nf:sent"))
+    except Exception:
+        g_sent.set(0)
+    g_fake.set(1 if FAKE else 0)
+    try:
+        g_processed.set(int(redis.get("mgw:metrics:processed_total") or 0))
+        g_errors.set(int(redis.get("mgw:metrics:errors_total") or 0))
+        g_wa_calls.set(int(redis.get("mgw:metrics:wa_calls_total") or 0))
+    except Exception:
+        pass
+    data = generate_latest(reg)
+    from fastapi.responses import Response
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 

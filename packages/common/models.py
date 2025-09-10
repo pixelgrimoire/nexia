@@ -18,6 +18,8 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     role = Column(String, nullable=False)
     status = Column(String, default="active")
+    password_hash = Column(String)
+    created_at = Column(DateTime)
 
 class Channel(Base):
     __tablename__ = "channels"
@@ -86,3 +88,11 @@ class Flow(Base):
     status = Column(String)
     created_by = Column(String)
 # Modelos comunes
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    id = Column(String, primary_key=True)
+    user_id = Column(ForeignKey("users.id"))
+    token = Column(String)  # stored as opaque string (consider hashing in prod)
+    expires_at = Column(DateTime)
+    revoked = Column(String, default="false")
