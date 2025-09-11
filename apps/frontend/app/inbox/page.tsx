@@ -10,6 +10,7 @@ import {
   markRead,
   subscribeInbox,
 } from "../lib/api";
+import { getAccessToken } from "../lib/auth";
 
 export default function InboxPage() {
   const router = useRouter();
@@ -38,7 +39,7 @@ export default function InboxPage() {
   };
 
   useEffect(() => {
-    const t = localStorage.getItem("nexia_token") as JWT | null;
+    const t = getAccessToken() as JWT | null;
     setToken(t);
     if (!t) {
       router.push("/auth/login");

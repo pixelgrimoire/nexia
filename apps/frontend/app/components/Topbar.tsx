@@ -71,6 +71,8 @@ export default function Topbar() {
         <Link href="/inbox" className="text-slate-700 hover:underline">Inbox{unread > 0 ? <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-xs align-middle">{unread}</span> : null}</Link>
         <Link href="/conversations" className="text-slate-700 hover:underline">Conversaciones</Link>
         <Link href="/channels" className="text-slate-700 hover:underline">Canales</Link>
+        <Link href="/connect" className="text-slate-700 hover:underline">Connect</Link>
+        <Link href="/templates" className="text-slate-700 hover:underline">Plantillas</Link>
         <span className="inline-flex items-center gap-1 text-xs text-slate-500">
           <span ref={dotRef} className={`inline-block w-2.5 h-2.5 rounded-full ${sseConnected ? 'bg-green-500' : 'bg-slate-400'}`}></span>
           {sseConnected ? 'SSE' : 'offline'}

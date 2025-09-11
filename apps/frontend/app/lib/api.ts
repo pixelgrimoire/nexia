@@ -158,6 +158,45 @@ export async function deleteChannel(token: JWT, id: string) {
   return apiFetch<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }, token);
 }
 
+// --- Templates ---
+export type Template = {
+  id: string;
+  org_id: string;
+  name?: string;
+  language?: string;
+  category?: string;
+  body?: string;
+  variables?: Record<string, unknown> | unknown[] | null;
+  status?: string;
+};
+
+export async function listTemplates(token: JWT) {
+  return apiFetch<Template[]>("/api/templates", {}, token);
+}
+
+export async function createTemplate(
+  token: JWT,
+  body: { name: string; language?: string; category?: string; body?: string; variables?: Record<string, unknown> | unknown[]; status?: string }
+) {
+  return apiFetch<Template>("/api/templates", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function getTemplate(token: JWT, id: string) {
+  return apiFetch<Template>(`/api/templates/${id}`, {}, token);
+}
+
+export async function updateTemplate(
+  token: JWT,
+  id: string,
+  body: { name?: string; language?: string; category?: string; body?: string; variables?: Record<string, unknown> | unknown[]; status?: string }
+) {
+  return apiFetch<Template>(`/api/templates/${id}`, { method: "PUT", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteTemplate(token: JWT, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/templates/${id}`, { method: "DELETE" }, token);
+}
+
 // --- SSE Inbox subscription (via fetch stream) ---
 // EventSource can't send Authorization headers; use fetch streaming instead.
 export function subscribeInbox(token: JWT, onEvent: (data: string) => void) {

@@ -14,10 +14,13 @@ export default function HomePage() {
   return (
     <main ref={root} className="space-y-3">
       <h1 className="text-2xl font-semibold">NexIA</h1>
-      <p className="text-slate-700">Frontend (MVP) listo. Inicia sesión de desarrollo:</p>
-      <p>
-        <Link className="inline-flex items-center rounded-md bg-slate-900 text-white px-3 py-1 text-sm" href="/login">Ir a Login (dev)</Link>
-      </p>
+      <p className="text-slate-700">Tu panel para automatizar WhatsApp con flujos e IA.</p>
+      <div className="flex flex-wrap gap-2">
+        <Link className="inline-flex items-center rounded-md bg-slate-900 text-white px-3 py-1 text-sm" href="/auth/login">Iniciar sesion</Link>
+        <Link className="inline-flex items-center rounded-md bg-emerald-600 text-white px-3 py-1 text-sm" href="/onboarding/start">Get Started</Link>
+        <Link className="inline-flex items-center rounded-md bg-slate-100 text-slate-900 px-3 py-1 text-sm" href="/connect">Connect WhatsApp</Link>
+      </div>
     </main>
   );
 }
+

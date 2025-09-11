@@ -9,6 +9,7 @@ import {
   createChannel,
 } from "../lib/api";
 import Toast from "../components/Toast";
+import { getAccessToken } from "../lib/auth";
 
 export default function ChannelsPage() {
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function ChannelsPage() {
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
-    const t = localStorage.getItem("nexia_token") as JWT | null;
+    const t = getAccessToken() as JWT | null;
     setToken(t);
   }, []);
 

@@ -9,7 +9,16 @@ from redis import Redis
 from sqlalchemy import text, func, or_
 from sqlalchemy.orm import Session
 from packages.common.db import engine, SessionLocal
-from packages.common.models import Organization, User, Conversation, Message, Contact, Channel, RefreshToken
+from packages.common.models import (
+    Organization,
+    User,
+    Conversation,
+    Message,
+    Contact,
+    Channel,
+    RefreshToken,
+    Template as DBTemplate,
+)
 import bcrypt
 from collections import defaultdict
 from typing import Optional
@@ -41,6 +50,13 @@ try:
     RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
 except Exception:
     RATE_LIMIT_PER_MIN = 60
+
+# WhatsApp 24h messaging window enforcement (text outside 24h requires template)
+WA_WINDOW_ENFORCE = os.getenv("WA_WINDOW_ENFORCE", "true").lower() == "true"
+try:
+    WA_WINDOW_HOURS = int(os.getenv("WA_WINDOW_HOURS", "24"))
+except Exception:
+    WA_WINDOW_HOURS = 24
 
 # simple in-process fixed-window rate limiter: key -> {window_ts: count}
 _rate_counters: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
@@ -666,6 +682,31 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
     msg_type = body.type
     if msg_type not in ("text", "template", "media"):
         raise HTTPException(status_code=400, detail="invalid-type")
+
+    # Enforce WhatsApp 24h window for text messages (template messages are allowed anytime)
+    if WA_WINDOW_ENFORCE and msg_type == "text":
+        try:
+            # find most recent inbound message for this conversation
+            last_in = (
+                db.query(Message)
+                .filter(Message.conversation_id == conv.id)
+                .filter(Message.direction == "in")
+                .order_by(getattr(Message, 'created_at', Message.id).desc())
+                .first()
+            )
+        except Exception:
+            last_in = None
+        within_window = False
+        if last_in is not None:
+            ts = getattr(last_in, 'created_at', None)
+            if ts is not None:
+                try:
+                    from datetime import datetime, timedelta
+                    within_window = (datetime.utcnow() - ts) <= timedelta(hours=WA_WINDOW_HOURS)
+                except Exception:
+                    within_window = False
+        if not within_window:
+            raise HTTPException(status_code=422, detail="outside-24h-window - use approved template")
     content: dict | None = None
     tpl_json: str | None = None
     media_json: str | None = None
@@ -910,5 +951,150 @@ def delete_channel(ch_id: str, user: dict = require_roles(Role.admin), db: Sessi
     if not ch:
         raise HTTPException(status_code=404, detail="channel not found")
     db.delete(ch)
+    db.commit()
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
+# Templates (MVP)
+
+
+class TemplateCreate(BaseModel):
+    name: str
+    language: str = "es"
+    category: str | None = None  # marketing|utility|authentication (guidance)
+    body: str | None = None
+    variables: dict | list | None = None
+    status: str | None = "draft"  # draft|approved|rejected|disabled
+
+
+class TemplateUpdate(BaseModel):
+    name: str | None = None
+    language: str | None = None
+    category: str | None = None
+    body: str | None = None
+    variables: dict | list | None = None
+    status: str | None = None
+
+
+class TemplateOut(BaseModel):
+    id: str
+    org_id: str
+    name: str | None = None
+    language: str | None = None
+    category: str | None = None
+    body: str | None = None
+    variables: dict | list | None = None
+    status: str | None = None
+
+
+def _ensure_unique_template(db: Session, org_id: str, name: str, language: str, exclude_id: str | None = None):
+    q = db.query(DBTemplate).filter(DBTemplate.org_id == org_id)
+    q = q.filter(DBTemplate.name == name, DBTemplate.language == language)
+    if exclude_id:
+        q = q.filter(DBTemplate.id != exclude_id)
+    if q.first():
+        raise HTTPException(status_code=409, detail="template name+language already exists")
+
+
+@app.post("/api/templates", response_model=TemplateOut)
+def create_template(body: TemplateCreate, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    # basic validation
+    if not body.name or not body.language:
+        raise HTTPException(status_code=400, detail="name and language required")
+    _ensure_unique_template(db, user.get("org_id"), body.name, body.language)
+    tid = str(uuid4())
+    row = DBTemplate(
+        id=tid,
+        org_id=user.get("org_id"),
+        name=body.name,
+        language=body.language,
+        category=body.category,
+        body=body.body,
+        variables=body.variables if isinstance(body.variables, (dict, list)) else None,
+        status=body.status or "draft",
+    )
+    db.add(row)
+    db.commit()
+    return TemplateOut(
+        id=row.id,
+        org_id=row.org_id,
+        name=row.name,
+        language=row.language,
+        category=row.category,
+        body=row.body,
+        variables=row.variables,
+        status=row.status,
+    )
+
+
+@app.get("/api/templates", response_model=list[TemplateOut])
+def list_templates(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    rows = db.query(DBTemplate).filter(DBTemplate.org_id == user.get("org_id")).all()
+    out: list[TemplateOut] = []
+    for r in rows:
+        out.append(
+            TemplateOut(
+                id=r.id,
+                org_id=r.org_id,
+                name=r.name,
+                language=r.language,
+                category=r.category,
+                body=r.body,
+                variables=r.variables,
+                status=r.status,
+            )
+        )
+    return out
+
+
+def _load_template_for_org(db: Session, tpl_id: str, org_id: str) -> DBTemplate | None:
+    r = db.get(DBTemplate, tpl_id)
+    if not r or r.org_id != org_id:
+        return None
+    return r
+
+
+@app.get("/api/templates/{tpl_id}", response_model=TemplateOut)
+def get_template(tpl_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    r = _load_template_for_org(db, tpl_id, user.get("org_id"))
+    if not r:
+        raise HTTPException(status_code=404, detail="template not found")
+    return TemplateOut(id=r.id, org_id=r.org_id, name=r.name, language=r.language, category=r.category, body=r.body, variables=r.variables, status=r.status)
+
+
+@app.put("/api/templates/{tpl_id}", response_model=TemplateOut)
+def update_template(tpl_id: str, body: TemplateUpdate, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    r = _load_template_for_org(db, tpl_id, user.get("org_id"))
+    if not r:
+        raise HTTPException(status_code=404, detail="template not found")
+    # enforce uniqueness when changing name/language
+    new_name = body.name if body.name is not None else r.name
+    new_lang = body.language if body.language is not None else r.language
+    if new_name and new_lang:
+        _ensure_unique_template(db, user.get("org_id"), new_name, new_lang, exclude_id=r.id)
+    if body.name is not None:
+        r.name = body.name
+    if body.language is not None:
+        r.language = body.language
+    if body.category is not None:
+        r.category = body.category
+    if body.body is not None:
+        r.body = body.body
+    if body.variables is not None:
+        r.variables = body.variables if isinstance(body.variables, (dict, list)) else None
+    if body.status is not None:
+        r.status = body.status
+    db.commit()
+    db.refresh(r)
+    return TemplateOut(id=r.id, org_id=r.org_id, name=r.name, language=r.language, category=r.category, body=r.body, variables=r.variables, status=r.status)
+
+
+@app.delete("/api/templates/{tpl_id}")
+def delete_template(tpl_id: str, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    r = _load_template_for_org(db, tpl_id, user.get("org_id"))
+    if not r:
+        raise HTTPException(status_code=404, detail="template not found")
+    db.delete(r)
     db.commit()
     return {"ok": True}

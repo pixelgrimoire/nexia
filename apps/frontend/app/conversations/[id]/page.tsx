@@ -10,6 +10,7 @@ import {
   type Message,
   subscribeInbox,
 } from "../../lib/api";
+import { getAccessToken } from "../../lib/auth";
 
 export default function ConversationDetailPage() {
   const params = useParams<{ id: string }>();
@@ -31,7 +32,7 @@ export default function ConversationDetailPage() {
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
-    setToken(localStorage.getItem("nexia_token") as JWT | null);
+    setToken(getAccessToken() as JWT | null);
   }, []);
 
   const hasToken = useMemo(() => Boolean(token), [token]);
@@ -55,10 +56,10 @@ export default function ConversationDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, convId]);
 
-  // Simple route protection: if no token, redirect to /login
+  // Simple route protection: if no token, redirect to /auth/login
   useEffect(() => {
     if (token === null) return; // still resolving
-    if (!token) router.push("/login");
+    if (!token) router.push("/auth/login");
   }, [token, router]);
 
   // SSE auto-refresh on inbox events
@@ -100,8 +101,16 @@ export default function ConversationDetailPage() {
       await load();
       setToast({ msg: "Mensaje enviado", type: "success" });
     } catch (e: any) {
-      setError(e?.message || "Error enviando");
-      setToast({ msg: "Error enviando", type: "error" });
+      const msg = String(e?.message || "Error enviando");
+      // Detect 24h window enforcement from API (HTTP 422)
+      if (msg.includes("422") || msg.toLowerCase().includes("outside-24h-window")) {
+        setMsgType("template");
+        setToast({ msg: "Fuera de la ventana de 24h: usa una plantilla aprobada", type: "error" });
+        setError("Fuera de 24h — cambia a plantilla");
+      } else {
+        setError(msg);
+        setToast({ msg: "Error enviando", type: "error" });
+      }
     } finally {
       setSending(false);
     }
@@ -110,7 +119,7 @@ export default function ConversationDetailPage() {
   return (
     <main className="space-y-4">
       <h1 className="text-xl font-semibold">Conversación {convId}</h1>
-      {!hasToken && <p className="text-red-600">Ve a /login primero.</p>}
+      {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       {error && <p className="text-red-600">{error}</p>}
       {loading ? (
         <p>Cargando…</p>

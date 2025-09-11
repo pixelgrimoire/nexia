@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { devLogin, getMe } from "../lib/api";
+import { setTokens } from "../lib/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("dev@example.com");
@@ -15,7 +16,7 @@ export default function LoginPage() {
     setError(null);
     try {
       const { access_token } = await devLogin(email, org, role);
-      localStorage.setItem("nexia_token", access_token);
+      setTokens(access_token, null);
       // sanity check
       await getMe(access_token);
       location.assign("/conversations");

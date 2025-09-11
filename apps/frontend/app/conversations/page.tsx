@@ -11,6 +11,7 @@ import {
   type Conversation,
   type Channel,
 } from "../lib/api";
+import { getAccessToken } from "../lib/auth";
 
 export default function ConversationsPage() {
   const router = useRouter();
@@ -27,7 +28,7 @@ export default function ConversationsPage() {
   const [creatingChannel, setCreatingChannel] = useState(false);
 
   useEffect(() => {
-    const t = localStorage.getItem("nexia_token");
+    const t = getAccessToken();
     setToken(t as JWT | null);
   }, []);
 
@@ -111,7 +112,7 @@ export default function ConversationsPage() {
   return (
     <main className="space-y-4">
       <h1 className="text-xl font-semibold">Conversaciones</h1>
-      {!hasToken && <p className="text-red-600">Ve a /login primero.</p>}
+      {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       {error && <p className="text-red-600">{error}</p>}
       {loading ? (
         <p>Cargando…</p>

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { type JWT, type Channel, getChannel, updateChannel, deleteChannel } from "../../lib/api";
 import Toast from "../../components/Toast";
+import { getAccessToken } from "../../lib/auth";
 
 export default function ChannelEditPage() {
   const router = useRouter();
@@ -21,7 +22,7 @@ export default function ChannelEditPage() {
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
-    const t = localStorage.getItem("nexia_token") as JWT | null;
+    const t = getAccessToken() as JWT | null;
     setToken(t);
     if (!t) {
       router.push("/auth/login");
