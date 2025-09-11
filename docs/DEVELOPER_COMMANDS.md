@@ -80,7 +80,7 @@ Windows (PowerShell):
 ./scripts/migrate.ps1
 ```
 
-Ensure `DATABASE_URL` points to your Postgres instance (see `.env.example`).
+Ensure `DATABASE_URL` points to your Postgres instance (see `.env.example`). If not set, both migrate scripts try `localhost:5432` (Docker Compose port mapping) and use it automatically when reachable.
 
 Windows (PowerShell):
 ```powershell

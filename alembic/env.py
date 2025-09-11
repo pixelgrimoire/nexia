@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -7,6 +9,12 @@ from alembic import context
 # this is the Alembic Config object, which provides access to the values
 # within the .ini file in use.
 config = context.config
+
+# Ensure project root is importable when Alembic runs from different CWDs
+# This lets us import `packages.common.models` reliably on Windows/CI
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
@@ -55,4 +63,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

@@ -36,3 +36,7 @@ Thumbs.db
 # Next.js
 .next/
 
+# Vercel / Next export
+.vercel/
+out/
+

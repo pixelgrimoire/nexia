@@ -8,8 +8,16 @@ services:
       POSTGRES_USER: nf_user
       POSTGRES_PASSWORD: nf_pass
       POSTGRES_DB: nexia
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-nf_user} -d $${POSTGRES_DB:-nexia}"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
@@ -86,6 +94,12 @@ services:
     build:
       context: .
       dockerfile: services/contacts/Dockerfile
+    environment:
+      - CONTACTS_SKIP_DDL=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   analytics:
     build:

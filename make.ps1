@@ -13,6 +13,7 @@ switch ($Target) {
         Write-Host "  ci                        - run duplicate test checker and pytest using repo venv";
         Write-Host "  ci-local                  - run CI checks inside Docker (POSIX)";
         Write-Host "  ci-local-wsl              - run CI checks inside WSL (Windows)";
+        Write-Host "  migrate                   - apply DB migrations (Alembic)";
         Write-Host "  up                        - docker compose up -d --build";
         Write-Host "  down                      - docker compose down -v";
         Write-Host "  logs                      - docker compose logs -f --tail=200";
@@ -52,6 +53,7 @@ switch ($Target) {
         pip install pre-commit
         pre-commit install
     }
+    'migrate' { .\scripts\migrate.ps1 }
     'ci-local' {
         # Run CI checks inside a transient python container using Docker (Windows)
         $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
