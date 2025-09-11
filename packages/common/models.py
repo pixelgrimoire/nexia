@@ -96,3 +96,15 @@ class RefreshToken(Base):
     token = Column(String)  # stored as opaque string (consider hashing in prod)
     expires_at = Column(DateTime)
     revoked = Column(String, default="false")
+
+
+class FlowRun(Base):
+    __tablename__ = "flow_runs"
+    id = Column(String, primary_key=True)
+    org_id = Column(ForeignKey("organizations.id"))
+    flow_id = Column(ForeignKey("flows.id"))
+    status = Column(String)  # running|completed|failed
+    last_step = Column(String)  # path/key of last executed step
+    context = Column(JSONB)  # execution context/scratch
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)

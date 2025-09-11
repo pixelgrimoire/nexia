@@ -10,6 +10,12 @@ redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_re
 FAKE = os.getenv("WHATSAPP_FAKE_MODE", "true").lower() == "true"
 TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 PHONE_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+CONSUMER_GROUP = os.getenv("MGW_GROUP", "sender")
+CONSUMER_NAME = os.getenv("MGW_CONSUMER", None) or os.getenv("HOSTNAME", "sender-1")
+try:
+    MAX_RETRIES = int(os.getenv("MGW_MAX_RETRIES", "3"))
+except Exception:
+    MAX_RETRIES = 3
 
 handler = logging.StreamHandler()
 formatter = jsonlogger.JsonFormatter('%(asctime)s %(name)s %(levelname)s %(message)s')
@@ -68,7 +74,7 @@ async def process_message(msg_id: str, fields: dict):
             payload["type"] = "text"
             payload["text"] = {"body": text}
         wa_msg_id = None
-        for attempt in range(3):
+        for attempt in range(MAX_RETRIES):
             try:
                 resp = await asyncio.to_thread(
                     httpx.post, url, headers=headers, json=payload, timeout=10
@@ -86,10 +92,20 @@ async def process_message(msg_id: str, fields: dict):
                 logger.exception("whatsapp send attempt %s failed", attempt + 1)
                 try:
                     redis.incr("mgw:metrics:errors_total")
+                    redis.incr("mgw:metrics:retries_total")
                 except Exception:
                     pass
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
+        # After loop, if still no wa_msg_id, push to DLQ for observability
+        if wa_msg_id is None:
+            try:
+                dlq_payload = {k: str(v) for k, v in fields.items()}
+                dlq_payload['error'] = 'send_failed'
+                redis.xadd('nf:outbox:dlq', dlq_payload)
+                redis.incr("mgw:metrics:dlq_total")
+            except Exception:
+                logger.exception("failed to write to nf:outbox:dlq")
         result = {"fake": False, "to": to, "text": text, "client_id": client_id, "ts": time.time()}
         if wa_msg_id:
             result["wa_msg_id"] = wa_msg_id
@@ -188,14 +204,27 @@ async def process_message(msg_id: str, fields: dict):
     except Exception:
         logger.exception("persist outbound failed")
 
+async def _ensure_group(stream: str, group: str):
+    try:
+        await asyncio.to_thread(redis.execute_command, 'XGROUP', 'CREATE', stream, group, '$', 'MKSTREAM')
+        logger.info("created consumer group %s on %s", group, stream)
+    except Exception as e:
+        if "BUSYGROUP" in str(e).upper():
+            return
+        return
+
+
 async def loop():
-    # start from the beginning in dev so backlog is processed
-    last_id = "0-0"
-    logger.info("send_worker starting (FAKE=%s)", FAKE)
+    stream = 'nf:outbox'
+    await _ensure_group(stream, CONSUMER_GROUP)
+    logger.info("send_worker starting (FAKE=%s, group=%s consumer=%s)", FAKE, CONSUMER_GROUP, CONSUMER_NAME)
     while True:
         try:
-            # Use Redis XREAD via execute_command for consistent blocking reads
-            raw = await asyncio.to_thread(redis.execute_command, 'XREAD', 'BLOCK', 5000, 'COUNT', 1, 'STREAMS', 'nf:outbox', last_id)
+            raw = await asyncio.to_thread(
+                redis.execute_command,
+                'XREADGROUP', 'GROUP', CONSUMER_GROUP, CONSUMER_NAME,
+                'BLOCK', 5000, 'COUNT', 1, 'STREAMS', stream, '>'
+            )
             if not raw:
                 await asyncio.sleep(0.1)
                 continue
@@ -204,10 +233,8 @@ async def loop():
                 for msg in msgs:
                     msg_id = msg[0].decode() if isinstance(msg[0], bytes) else msg[0]
                     kvs = msg[1]
-                    # redis client may return fields as a dict or a flat list of pairs
                     fields = {}
                     if isinstance(kvs, dict):
-                        # values already decoded when decode_responses=True
                         for k, v in kvs.items():
                             fields[str(k)] = str(v)
                     else:
@@ -215,8 +242,11 @@ async def loop():
                             k = kvs[i].decode() if isinstance(kvs[i], bytes) else kvs[i]
                             v = kvs[i+1].decode() if isinstance(kvs[i+1], bytes) else kvs[i+1]
                             fields[k] = v
-                    last_id = msg_id
                     await process_message(msg_id, fields)
+                    try:
+                        redis.xack(stream, CONSUMER_GROUP, msg_id)
+                    except Exception:
+                        logger.exception("xack failed")
         except Exception:
             logger.exception("send_worker loop error")
             await asyncio.sleep(1)

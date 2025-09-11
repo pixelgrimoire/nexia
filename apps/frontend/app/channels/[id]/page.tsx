@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { type JWT, type Channel, getChannel, updateChannel, deleteChannel } from "../../lib/api";
+import { type JWT, type Channel, getChannel, updateChannel, deleteChannel, verifyChannel } from "../../lib/api";
 import Toast from "../../components/Toast";
 import { getAccessToken } from "../../lib/auth";
 
@@ -19,6 +19,7 @@ export default function ChannelEditPage() {
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
@@ -81,6 +82,21 @@ export default function ChannelEditPage() {
     }
   };
 
+  const onVerify = async () => {
+    if (!token) return;
+    setVerifying(true);
+    setError(null);
+    try {
+      const r = await verifyChannel(token, id);
+      if (r.ok) setToast({ msg: `Verificado${r.details === 'fake-mode' ? ' (FAKE)' : ''}`, type: 'success' });
+      else setToast({ msg: `Verificación incompleta${r.details ? ': ' + r.details : ''}`, type: 'error' });
+    } catch (e: any) {
+      setToast({ msg: e?.message || 'Error verificando', type: 'error' });
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   return (
     <main className="space-y-4">
       <h1 className="text-xl font-semibold">Editar canal</h1>
@@ -106,6 +122,7 @@ export default function ChannelEditPage() {
           </div>
           <div className="flex items-center gap-3">
             <button type="submit" disabled={saving} className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60">{saving ? "Guardando…" : "Guardar"}</button>
+            <button type="button" onClick={onVerify} disabled={verifying} className="px-3 py-2 rounded border border-slate-300">{verifying ? 'Verificando…' : 'Verificar'}</button>
             <button type="button" onClick={onDelete} disabled={removing} className="px-3 py-2 rounded border border-red-300 text-red-700">{removing ? "Eliminando…" : "Eliminar"}</button>
           </div>
         </form>

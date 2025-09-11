@@ -7,6 +7,7 @@ import {
   type Channel,
   listChannels,
   createChannel,
+  verifyChannel,
 } from "../lib/api";
 import Toast from "../components/Toast";
 import { getAccessToken } from "../lib/auth";
@@ -23,6 +24,7 @@ export default function ChannelsPage() {
   const [pnid, setPnid] = useState("");
   const [status, setStatus] = useState("active");
   const [creating, setCreating] = useState(false);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
 
   useEffect(() => {
@@ -81,6 +83,25 @@ export default function ChannelsPage() {
     }
   };
 
+  const onVerify = async (id: string) => {
+    if (!token) return;
+    setVerifyingId(id);
+    setError(null);
+    try {
+      const r = await verifyChannel(token, id);
+      if (r.ok) {
+        setToast({ msg: `Canal verificado${r.details === 'fake-mode' ? ' (FAKE)' : ''}`, type: 'success' });
+      } else {
+        const detail = r.details ? `: ${r.details}` : '';
+        setToast({ msg: `Verificación incompleta${detail}`, type: 'error' });
+      }
+    } catch (e: any) {
+      setToast({ msg: e?.message || 'Error verificando canal', type: 'error' });
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+
   return (
     <main className="space-y-4">
       <h1 className="text-xl font-semibold">Canales</h1>
@@ -101,7 +122,12 @@ export default function ChannelsPage() {
                     <div className="text-slate-600">pn_id: {(c.credentials as any)?.phone_number_id || "-"}</div>
                     <div className="text-slate-600">estado: {c.status || "-"}</div>
                   </div>
-                  <Link className="text-blue-700 underline" href={`/channels/${c.id}`}>Editar</Link>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => onVerify(c.id)} disabled={verifyingId === c.id} className="px-2 py-1 rounded border border-slate-300 text-sm">
+                      {verifyingId === c.id ? 'Verificando…' : 'Verificar'}
+                    </button>
+                    <Link className="text-blue-700 underline" href={`/channels/${c.id}`}>Editar</Link>
+                  </div>
                 </li>
               ))}
             </ul>

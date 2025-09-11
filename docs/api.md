@@ -138,6 +138,27 @@ PUT /api/channels/{id}
 DELETE /api/channels/{id}
 ```
 
+- Verificar canal (ping a Messaging Gateway)
+
+```http
+POST /api/channels/{id}/verify
+Authorization: Bearer <JWT>
+```
+
+Respuesta:
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "fake": true,
+  "has_token": false,
+  "phone_id": "111",
+  "match": true,
+  "details": "fake-mode"
+}
+```
+
 Notas:
 - Envíos (`POST /api/conversations/{id}/messages`) se publican en `nf:outbox` enriquecidos con `org_id`, `requested_by`, `conversation_id`, `channel_id`, `to`.
 - `GET /api/inbox/stream` está protegido por roles (`admin|agent`).

@@ -11,6 +11,7 @@ Archivos principales:
 - `contributing.md` — cómo contribuir
 - `runbooks.md` — runbooks y resolución de incidentes
 - `service-*` — documentación por servicio
+- `service-api-gateway-utf8.md` — API Gateway (versión UTF‑8 actualizada)
 - `security.md` — seguridad
 - `roadmap.md` — roadmap
 

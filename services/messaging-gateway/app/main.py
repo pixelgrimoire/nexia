@@ -57,6 +57,8 @@ async def metrics_prom():
     g_processed = Gauge('nexia_mgw_processed_total', 'Total processed messages (from Redis)', registry=reg)
     g_errors = Gauge('nexia_mgw_errors_total', 'Total errors (from Redis)', registry=reg)
     g_wa_calls = Gauge('nexia_mgw_wa_calls_total', 'Total WhatsApp API calls (from Redis)', registry=reg)
+    g_retries = Gauge('nexia_mgw_retries_total', 'Total retries (from Redis)', registry=reg)
+    g_dlq = Gauge('nexia_mgw_dlq_total', 'Total DLQ entries (from Redis)', registry=reg)
     try:
         g_outbox.set(redis.xlen("nf:outbox"))
     except Exception:
@@ -70,6 +72,8 @@ async def metrics_prom():
         g_processed.set(int(redis.get("mgw:metrics:processed_total") or 0))
         g_errors.set(int(redis.get("mgw:metrics:errors_total") or 0))
         g_wa_calls.set(int(redis.get("mgw:metrics:wa_calls_total") or 0))
+        g_retries.set(int(redis.get("mgw:metrics:retries_total") or 0))
+        g_dlq.set(int(redis.get("mgw:metrics:dlq_total") or 0))
     except Exception:
         pass
     data = generate_latest(reg)

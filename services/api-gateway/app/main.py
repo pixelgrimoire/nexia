@@ -22,6 +22,8 @@ from packages.common.models import (
 import bcrypt
 from collections import defaultdict
 from typing import Optional
+from urllib.parse import urlparse
+import http.client
 from prometheus_client import CollectorRegistry, Counter, generate_latest, CONTENT_TYPE_LATEST
 
 from contextlib import asynccontextmanager
@@ -56,7 +58,10 @@ WA_WINDOW_ENFORCE = os.getenv("WA_WINDOW_ENFORCE", "true").lower() == "true"
 try:
     WA_WINDOW_HOURS = int(os.getenv("WA_WINDOW_HOURS", "24"))
 except Exception:
-    WA_WINDOW_HOURS = 24
+WA_WINDOW_HOURS = 24
+
+# Internal URL for Messaging Gateway (used for channel verification)
+MGW_INTERNAL_URL = os.getenv("MGW_INTERNAL_URL", "http://messaging-gateway:8000")
 
 # simple in-process fixed-window rate limiter: key -> {window_ts: count}
 _rate_counters: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
@@ -137,6 +142,55 @@ def _set_idempotent_cached(key: Optional[str], payload: dict, ttl: int = 600) ->
     except Exception:
         pass
 
+def _tpl_language_from_payload(tpl: dict) -> Optional[str]:
+    try:
+        lang = tpl.get("language")
+        if isinstance(lang, dict):
+            code = lang.get("code") or lang.get("locale") or lang.get("name")
+            return str(code) if code else None
+        if isinstance(lang, str):
+            return lang
+    except Exception:
+        return None
+    return None
+
+def _require_template_approved(db: Session, org_id: str, tpl: dict) -> None:
+    name = (tpl or {}).get("name")
+    lang = _tpl_language_from_payload(tpl) or "es"
+    if not name:
+        raise HTTPException(status_code=400, detail="template-invalid")
+    try:
+        row = (
+            db.query(DBTemplate)
+            .filter(DBTemplate.org_id == str(org_id))
+            .filter(DBTemplate.name == name)
+            .filter(DBTemplate.language == lang)
+            .first()
+        )
+    except Exception:
+        row = None
+    if not row or getattr(row, "status", None) != "approved":
+        raise HTTPException(status_code=422, detail="template-not-approved")
+
+def _fetch_mgw_status() -> Optional[dict]:
+    try:
+        u = urlparse(MGW_INTERNAL_URL)
+        host = u.hostname or "messaging-gateway"
+        port = u.port or (443 if (u.scheme or "http") == "https" else 80)
+        path = "/internal/status"
+        conn = http.client.HTTPSConnection(host, port, timeout=3) if (u.scheme or "http") == "https" else http.client.HTTPConnection(host, port, timeout=3)
+        conn.request("GET", path, headers={"Host": u.hostname or host})
+        resp = conn.getresponse()
+        if resp.status >= 200 and resp.status < 300:
+            body = resp.read().decode("utf-8", errors="replace")
+            try:
+                return json.loads(body)
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
 class SendMessage(BaseModel):
     channel_id: str
     to: str
@@ -184,7 +238,7 @@ async def healthz():
 
 
 @app.post("/api/messages/send")
-async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent), request: Request = None):
+async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent), request: Request = None, db: Session = Depends(lambda: SessionLocal())):
     # rate limit per org+route
     _enforce_rate_limit(f"send:{user.get('org_id','anon')}")
     # idempotency
@@ -216,6 +270,14 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
         tpl = payload.get("template")
         if not isinstance(tpl, dict) or not tpl.get("name"):
             raise HTTPException(status_code=400, detail="template-invalid")
+        # Enforce approved template for compliance
+        try:
+            _require_template_approved(db, user.get("org_id"), tpl)
+        except HTTPException:
+            raise
+        except Exception:
+            # if DB unavailable, fail safe in dev by rejecting
+            raise HTTPException(status_code=503, detail="template-check-failed")
         payload["template"] = json.dumps(tpl)
     elif msg_type == "media":
         media = payload.get("media")
@@ -718,6 +780,13 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
         tpl = body.template
         if not isinstance(tpl, dict) or not tpl.get("name"):
             raise HTTPException(status_code=400, detail="template-invalid")
+        # Enforce approved template
+        try:
+            _require_template_approved(db, user.get("org_id"), tpl)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=503, detail="template-check-failed")
         tpl_json = json.dumps(tpl)
         content = {"template": tpl}
     elif msg_type == "media":
@@ -953,6 +1022,42 @@ def delete_channel(ch_id: str, user: dict = require_roles(Role.admin), db: Sessi
     db.delete(ch)
     db.commit()
     return {"ok": True}
+
+
+class ChannelVerifyOut(BaseModel):
+    ok: bool
+    status: str | None = None  # ok|warning|error
+    fake: bool | None = None
+    has_token: bool | None = None
+    phone_id: str | None = None
+    match: bool | None = None
+    details: str | None = None
+
+
+@app.post("/api/channels/{ch_id}/verify", response_model=ChannelVerifyOut)
+def verify_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    ch = _load_channel_for_org(db, ch_id, user.get("org_id"))
+    if not ch:
+        raise HTTPException(status_code=404, detail="channel not found")
+    pnid = _get_pnid(getattr(ch, "credentials", None))
+    st = _fetch_mgw_status()
+    if st is None:
+        return ChannelVerifyOut(ok=False, status="warning", details="messaging-gateway unreachable")
+    try:
+        info = (((st or {}).get("workers", {}) or {}).get("send_worker", {}) or {})
+        fake = bool(info.get("fake"))
+        has_token = bool(info.get("has_token"))
+        phone_id = info.get("phone_id")
+        match = (pnid is None) or (phone_id == pnid)
+        # ok in FAKE mode too, but mark it in status/details
+        ok = match and (has_token or fake)
+        status = "ok" if ok else "warning"
+        details = None if ok else ("phone_id mismatch" if pnid and phone_id and phone_id != pnid else "missing token or phone_id")
+        if ok and fake:
+            details = "fake-mode"
+        return ChannelVerifyOut(ok=ok, status=status, fake=fake, has_token=has_token, phone_id=phone_id, match=match, details=details)
+    except Exception:
+        return ChannelVerifyOut(ok=False, status="error", details="invalid mgw status format")
 
 
 # ----------------------------------------------------------------------------

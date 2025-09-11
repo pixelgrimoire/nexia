@@ -98,3 +98,17 @@ $env:REDIS_URL = 'redis://localhost:6379/0'; python services\flow-engine\worker\
 ```
 
 Ejemplos de payloads y pruebas adicionales están en `docs/`.
+
+Datos de ejemplo (semilla)
+--------------------------
+
+Para probar flujos y cumplimiento de plantillas rápidamente, puedes sembrar una organización, una plantilla aprobada (`welcome`, `es`) y un flujo activo de demo:
+
+```bash
+python scripts/seed_mvp.py "Acme"
+```
+
+Esto crea:
+- Organización "Acme" (si no existe)
+- Plantilla `welcome` (es) con `status=approved`
+- Un Flow activo con paths de ejemplo: `hola` (greeting con `wait` + `set_attribute`), `precio` (usa plantilla), y `default`.

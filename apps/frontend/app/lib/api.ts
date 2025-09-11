@@ -158,6 +158,14 @@ export async function deleteChannel(token: JWT, id: string) {
   return apiFetch<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }, token);
 }
 
+export async function verifyChannel(token: JWT, id: string) {
+  return apiFetch<{ ok: boolean; status?: string; fake?: boolean; has_token?: boolean; phone_id?: string; match?: boolean; details?: string }>(
+    `/api/channels/${id}/verify`,
+    { method: "POST" },
+    token
+  );
+}
+
 // --- Templates ---
 export type Template = {
   id: string;

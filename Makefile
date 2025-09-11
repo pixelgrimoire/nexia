@@ -15,6 +15,7 @@ help:
 	@echo "  make logs               - docker compose logs -f --tail=200"
 	@echo "  make ps                 - docker compose ps"
 	@echo "  make smoke              - run E2E smoke test (requires stack up)"
+	@echo "  make seed               - seed MVP data (org+template+flow)"
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -62,3 +63,7 @@ ps:
 
 smoke:
 	python scripts/e2e_test.py
+
+.PHONY: seed
+seed:
+	python scripts/seed_mvp.py "Acme"
