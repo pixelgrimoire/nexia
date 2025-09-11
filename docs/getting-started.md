@@ -6,7 +6,7 @@ Quickstart (FAKE mode)
 Para validar el pipeline end‑to‑end rápidamente en local:
 
 ```bash
-# 1) Levanta el stack (Traefik, Redis, servicios en modo FAKE)
+# 1) Levanta el stack (Traefik, Redis, servicios en modo FAKE). Incluye migraciones autom�ticas (servicio 'migrator').
 make up
 
 # 2) Ejecuta el smoke test E2E (simula un webhook firmado y espera un envío en nf:sent)
@@ -112,3 +112,4 @@ Esto crea:
 - Organización "Acme" (si no existe)
 - Plantilla `welcome` (es) con `status=approved`
 - Un Flow activo con paths de ejemplo: `hola` (greeting con `wait` + `set_attribute`), `precio` (usa plantilla), y `default`.
+

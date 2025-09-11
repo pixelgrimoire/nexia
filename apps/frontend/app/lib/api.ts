@@ -241,42 +241,54 @@ export async function deleteFlow(token: JWT, id: string) {
 
 // --- SSE Inbox subscription (via fetch stream) ---
 // EventSource can't send Authorization headers; use fetch streaming instead.
-export function subscribeInbox(token: JWT, onEvent: (data: string) => void) {
+export function subscribeInbox(
+  token: JWT,
+  onEvent: (data: string) => void,
+  onStatus?: (s: "connecting" | "connected" | "reconnecting" | "stopped") => void,
+) {
   const ctrl = new AbortController();
   const headers = new Headers({ Authorization: `Bearer ${token}`, Accept: "text/event-stream" });
-  (async () => {
-    try {
-      const res = await fetch("/api/inbox/stream", { headers, signal: ctrl.signal });
-      if (!res.body) return;
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // Split SSE events on double newlines
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
-        for (const chunk of parts) {
-          // extract last data: line
-          const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"));
-          if (dataLine) onEvent(dataLine.slice(5).trim());
+  let stopped = false;
+
+  const connect = async () => {
+    let backoff = 1000; // 1s -> 15s
+    while (!stopped) {
+      try {
+        if (onStatus) onStatus("connecting");
+        const res = await fetch("/api/inbox/stream", { headers, signal: ctrl.signal });
+        if (!res.body) throw new Error("no-body");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        // reset backoff after a successful connect
+        backoff = 1000;
+        if (onStatus) onStatus("connected");
+        // Read stream
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const chunk of parts) {
+            const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"));
+            if (dataLine) onEvent(dataLine.slice(5).trim());
+          }
         }
-      }
-    } catch (err: any) {
-      // swallow abort errors; log others
-      if (!(err && err.name === "AbortError")) {
+      } catch (err: any) {
+        if (stopped || (err && err.name === "AbortError")) break;
         // eslint-disable-next-line no-console
-        console.error("SSE subscribe error", err);
+        console.warn("SSE inbox reconnect in", backoff, "ms");
+        if (onStatus) onStatus("reconnecting");
+        await new Promise((r) => setTimeout(r, backoff + Math.floor(Math.random() * 500)));
+        backoff = Math.min(backoff * 2, 15000);
       }
     }
-  })();
+  };
+  void connect();
   return () => {
-    try {
-      ctrl.abort();
-    } catch {
-      // ignore
-    }
+    stopped = true;
+    try { ctrl.abort(); } catch {}
+    if (onStatus) onStatus("stopped");
   };
 }

@@ -5,7 +5,7 @@
 ## Quickstart (FAKE mode)
 
 ```bash
-# Levantar stack
+# Levantar stack (incluye migraciones via servicio 'migrator')
 make up
 
 # Smoke test E2E (simula webhook y verifica nf:sent)
@@ -41,7 +41,7 @@ Revisa `docs/getting-started.md` para más detalles y troubleshooting.
 ## Comandos útiles
 
 ```bash
-make up       # docker compose up -d --build
+make up       # docker compose up -d --build (aplica Alembic)
 make down     # docker compose down -v
 make logs     # logs -f --tail=200
 make ps       # estado de contenedores
@@ -67,3 +67,4 @@ Luego abre `http://localhost:3000` y usa Login (dev) para obtener token.
 - Modo FAKE evita llamadas externas a WhatsApp; ideal para desarrollo.
 - Cambia variables en `.env` según `docs/env-vars.md`.
 - Métricas Prometheus disponibles en los servicios: consulta `/metrics` cuando aplique.
+- El servicio `migrator` (python:3.12) aplica Alembic automáticamente contra Postgres al levantar el stack. Si prefieres ejecutarlo manualmente: `make migrate` (POSIX) o `./scripts/migrate.ps1` (Windows).

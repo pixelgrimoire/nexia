@@ -43,6 +43,18 @@ services:
     ports:
       - "8000:8000"
 
+  migrator:
+    image: python:3.12-slim
+    working_dir: /work
+    environment:
+      - DATABASE_URL=postgresql+psycopg://nf_user:nf_pass@postgres:5432/nexia
+    volumes:
+      - ./:/work
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: bash -lc "set -e; python -m pip install --upgrade pip; pip install -q -r requirements-dev.txt; alembic upgrade head"
+
   webhook-receiver:
     build:
       context: .

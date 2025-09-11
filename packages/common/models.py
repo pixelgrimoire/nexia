@@ -1,8 +1,11 @@
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.types import JSON as SAJSON
 
 Base = declarative_base()
+
+# Use a portable JSON column for cross-dialect compatibility in tests/dev.
+JSONType = SAJSON
 
 class Organization(Base):
     __tablename__ = "organizations"
@@ -28,7 +31,7 @@ class Channel(Base):
     type = Column(String)
     mode = Column(String)
     status = Column(String)
-    credentials = Column(JSONB)
+    credentials = Column(JSONType)
     phone_number = Column(String)
 
 class Contact(Base):
@@ -38,8 +41,9 @@ class Contact(Base):
     wa_id = Column(String)
     phone = Column(String)
     name = Column(String)
-    attributes = Column(JSONB, default=dict)
-    tags = Column(ARRAY(String), default=list)
+    attributes = Column(JSONType, default=dict)
+    # Use JSON array on SQLite; ARRAY(String) on Postgres isn't essential for tests
+    tags = Column(JSONType, default=list)
     consent = Column(String)
     locale = Column(String)
     timezone = Column(String)
@@ -60,10 +64,10 @@ class Message(Base):
     conversation_id = Column(ForeignKey("conversations.id"))
     direction = Column(String)  # in|out
     type = Column(String)       # text|media|template
-    content = Column(JSONB)
+    content = Column(JSONType)
     template_id = Column(String, nullable=True)
     status = Column(String)     # delivered|read|failed
-    meta = Column(JSONB)
+    meta = Column(JSONType)
     client_id = Column(String)
     created_at = Column(DateTime)
 
@@ -75,7 +79,7 @@ class Template(Base):
     language = Column(String)
     category = Column(String)
     body = Column(Text)
-    variables = Column(JSONB)
+    variables = Column(JSONType)
     status = Column(String)
 
 class Flow(Base):
@@ -84,7 +88,7 @@ class Flow(Base):
     org_id = Column(ForeignKey("organizations.id"))
     name = Column(String)
     version = Column(Integer)
-    graph = Column(JSONB)
+    graph = Column(JSONType)
     status = Column(String)
     created_by = Column(String)
 # Modelos comunes
@@ -105,6 +109,6 @@ class FlowRun(Base):
     flow_id = Column(ForeignKey("flows.id"))
     status = Column(String)  # running|completed|failed
     last_step = Column(String)  # path/key of last executed step
-    context = Column(JSONB)  # execution context/scratch
+    context = Column(JSONType)  # execution context/scratch
     created_at = Column(DateTime)
     updated_at = Column(DateTime)

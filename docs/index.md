@@ -16,3 +16,6 @@ Archivos principales:
 - `roadmap.md` — roadmap
 
 Consulta `README.md` para enlace general.
+
+
+- whatsapp-24h-policy.md — política ventana 24h (API Gateway)

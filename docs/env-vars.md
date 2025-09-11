@@ -22,8 +22,9 @@ Cada servicio puede declarar variables adicionales en su `Dockerfile` o `require
 
 Opcionales (dev) 
 
-``nRATE_LIMIT_ENABLED
+```
+RATE_LIMIT_ENABLED
 RATE_LIMIT_PER_MIN
 DEV_LOGIN_ENABLED
 CONTACTS_REQUIRE_AUTH
-``
+```

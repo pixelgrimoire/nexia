@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { type JWT, type Template, listTemplates, createTemplate } from "../lib/api";
+import { type JWT, type Template, listTemplates, createTemplate, updateTemplate } from "../lib/api";
 import { getAccessToken } from "../lib/auth";
 import Toast from "../components/Toast";
 
@@ -13,6 +13,7 @@ export default function TemplatesPage() {
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<Template[]>([]);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("");
   // form
   const [name, setName] = useState("");
   const [language, setLanguage] = useState("es");
@@ -32,6 +33,13 @@ export default function TemplatesPage() {
       setError(null);
       try {
         const data = await listTemplates(t);
+        data.sort((a: any, b: any) => {
+          const sa = (a.status || "");
+          const sb = (b.status || "");
+          if (sa === "approved" && sb !== "approved") return -1;
+          if (sb === "approved" && sa !== "approved") return 1;
+          return (a.name || "").localeCompare(b.name || "");
+        });
         setRows(data);
       } catch (e: any) {
         setError(e?.message || "Error cargando plantillas");
@@ -42,6 +50,22 @@ export default function TemplatesPage() {
   }, [router]);
 
   const hasToken = useMemo(() => Boolean(token), [token]);
+
+  const filteredRows = useMemo(() => {
+    if (!statusFilter) return rows;
+    return rows.filter((r) => (r.status || "").toLowerCase() === statusFilter.toLowerCase());
+  }, [rows, statusFilter]);
+
+  const quickSetStatus = async (id: string, next: string) => {
+    if (!token) return;
+    try {
+      const r = await updateTemplate(token, id, { status: next as any });
+      setRows((prev) => prev.map((x) => (x.id === id ? r : x)));
+      setToast({ msg: next === "approved" ? "Plantilla aprobada" : "Plantilla deshabilitada", type: next === "approved" ? "success" : "info" });
+    } catch (e: any) {
+      setToast({ msg: "Error actualizando estado", type: "error" });
+    }
+  };
 
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,4 +145,6 @@ export default function TemplatesPage() {
     </main>
   );
 }
+
+
 

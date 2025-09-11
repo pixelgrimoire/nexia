@@ -9,9 +9,16 @@ const nextConfig = {
         source: '/api/:path*',
         destination: `${API_GATEWAY_URL}/api/:path*`,
       },
+      {
+        source: '/metrics',
+        destination: `${API_GATEWAY_URL}/metrics`,
+      },
+      {
+        source: '/internal/:path*',
+        destination: `${API_GATEWAY_URL}/internal/:path*`,
+      },
     ];
   },
 };
 
 export default nextConfig;
-

@@ -14,8 +14,11 @@ spec.loader.exec_module(send_worker)
 class FakeRedis:
     def __init__(self):
         self.xadd_calls = []
+        self.incr_calls = []
     def xadd(self, stream, mapping):
         self.xadd_calls.append((stream, dict(mapping)))
+    def incr(self, key):
+        self.incr_calls.append(key)
 
 
 def test_process_message_forwards_orig_text():
@@ -145,3 +148,27 @@ def test_process_message_media_real_mode(monkeypatch):
     body = called["json"]
     assert body["type"] == "image"
     assert body["image"]["link"].startswith("https://example.com/")
+
+
+def test_process_message_dlq_on_fail(monkeypatch):
+    root = Path(__file__).resolve().parents[3]
+    module_path = root / "services" / "messaging-gateway" / "worker" / "send_worker.py"
+    spec = importlib.util.spec_from_file_location("send_worker", str(module_path))
+    sw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sw)
+
+    fake = FakeRedis()
+    sw.redis = fake
+    sw.FAKE = False
+    sw.TOKEN = "token"
+    sw.PHONE_ID = "111"
+
+    def boom(*args, **kwargs):
+        raise httpx.ConnectError("boom", request=httpx.Request("POST", "http://x"))
+    monkeypatch.setattr(sw.httpx, "post", boom)
+
+    fields = {"to": "123", "text": "hi", "client_id": "cid3"}
+    asyncio.run(sw.process_message("1-err", fields))
+
+    assert any(stream == "nf:outbox:dlq" for stream, _ in fake.xadd_calls)
+    assert "mgw:metrics:dlq_total" in fake.incr_calls

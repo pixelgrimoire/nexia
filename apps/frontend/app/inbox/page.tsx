@@ -18,6 +18,7 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [convs, setConvs] = useState<Conversation[]>([]);
+  const [conn, setConn] = useState<"connecting" | "connected" | "reconnecting" | "stopped">("connecting");
   const [stateFilter, setStateFilter] = useState<string>("");
   const [q, setQ] = useState("");
   const stopRef = useRef<null | (() => void)>(null);
@@ -47,9 +48,13 @@ export default function InboxPage() {
     }
     load(t);
     // Subscribe SSE
-    stopRef.current = subscribeInbox(t, () => {
-      load(t);
-    });
+    stopRef.current = subscribeInbox(
+      t,
+      () => {
+        load(t);
+      },
+      (s) => setConn(s)
+    );
     return () => {
       if (stopRef.current) stopRef.current();
     };
@@ -77,9 +82,26 @@ export default function InboxPage() {
     }
   };
 
+  const totalUnread = convs.reduce((acc, c) => acc + (typeof c.unread === "number" ? c.unread : 0), 0);
+
+  const ConnBadge = () => (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-slate-300">
+      <span
+        className={
+          "inline-block w-2 h-2 rounded-full " +
+          (conn === "connected" ? "bg-emerald-500" : conn === "reconnecting" ? "bg-amber-500" : "bg-slate-400")
+        }
+      />
+      {conn}
+    </span>
+  );
+
   return (
     <main className="space-y-4">
-      <h1 className="text-xl font-semibold">Inbox</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Inbox {totalUnread > 0 && (<span className="ml-2 text-sm px-2 py-0.5 rounded bg-red-100 text-red-800">{totalUnread} sin leer</span>)}</h1>
+        <ConnBadge />
+      </div>
       {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       <div className="flex gap-2 items-center">
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar…" className="border border-slate-300 rounded px-3 py-2" />
