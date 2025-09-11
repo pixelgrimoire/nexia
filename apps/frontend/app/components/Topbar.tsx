@@ -79,6 +79,7 @@ export default function Topbar() {
     }
   };
   return (
+    <>
     <header className="mb-4 flex items-center justify-between">
       <nav className="flex items-center gap-4">
         <Link href="/" className="font-semibold">NexIA</Link>
@@ -107,5 +108,6 @@ export default function Topbar() {
       {error && <div className="text-red-600 text-xs">{error}</div>}
     </header>
     <Toast message={toast?.msg || null} type={toast?.type} onClose={() => setToast(null)} />
+    </>
   );
 }
