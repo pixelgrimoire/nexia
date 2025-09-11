@@ -73,6 +73,7 @@ export default function Topbar() {
         <Link href="/channels" className="text-slate-700 hover:underline">Canales</Link>
         <Link href="/connect" className="text-slate-700 hover:underline">Connect</Link>
         <Link href="/templates" className="text-slate-700 hover:underline">Plantillas</Link>
+        <Link href="/flows" className="text-slate-700 hover:underline">Flujos</Link>
         <span className="inline-flex items-center gap-1 text-xs text-slate-500">
           <span ref={dotRef} className={`inline-block w-2.5 h-2.5 rounded-full ${sseConnected ? 'bg-green-500' : 'bg-slate-400'}`}></span>
           {sseConnected ? 'SSE' : 'offline'}

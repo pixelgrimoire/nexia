@@ -18,6 +18,7 @@ from packages.common.models import (
     Channel,
     RefreshToken,
     Template as DBTemplate,
+    Flow as DBFlow,
 )
 import bcrypt
 from collections import defaultdict
@@ -58,7 +59,7 @@ WA_WINDOW_ENFORCE = os.getenv("WA_WINDOW_ENFORCE", "true").lower() == "true"
 try:
     WA_WINDOW_HOURS = int(os.getenv("WA_WINDOW_HOURS", "24"))
 except Exception:
-WA_WINDOW_HOURS = 24
+    WA_WINDOW_HOURS = 24
 
 # Internal URL for Messaging Gateway (used for channel verification)
 MGW_INTERNAL_URL = os.getenv("MGW_INTERNAL_URL", "http://messaging-gateway:8000")
@@ -1200,6 +1201,108 @@ def delete_template(tpl_id: str, user: dict = require_roles(Role.admin), db: Ses
     r = _load_template_for_org(db, tpl_id, user.get("org_id"))
     if not r:
         raise HTTPException(status_code=404, detail="template not found")
+    db.delete(r)
+    db.commit()
+    return {"ok": True}
+
+# ----------------------------------------------------------------------------
+# Flows (CRUD + publish semantics)
+
+
+class FlowCreate(BaseModel):
+    name: str
+    version: int | None = 1
+    graph: dict | None = None
+    status: str | None = "draft"  # draft|active|inactive
+
+
+class FlowUpdate(BaseModel):
+    name: str | None = None
+    version: int | None = None
+    graph: dict | None = None
+    status: str | None = None  # when set to active, inactivate others
+
+
+class FlowOut(BaseModel):
+    id: str
+    org_id: str
+    name: str | None = None
+    version: int | None = None
+    graph: dict | None = None
+    status: str | None = None
+    created_by: str | None = None
+
+
+@app.get("/api/flows", response_model=list[FlowOut])
+def list_flows(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    rows = db.query(DBFlow).filter(DBFlow.org_id == user.get("org_id")).order_by(getattr(DBFlow, 'version', 0).desc()).all()
+    out: list[FlowOut] = []
+    for r in rows:
+        out.append(FlowOut(id=r.id, org_id=r.org_id, name=r.name, version=r.version, graph=r.graph if isinstance(r.graph, dict) else None, status=r.status, created_by=r.created_by))
+    return out
+
+
+@app.post("/api/flows", response_model=FlowOut)
+def create_flow(body: FlowCreate, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    fid = str(uuid4())
+    # if activating this flow, mark others inactive
+    if body.status == "active":
+        try:
+            db.query(DBFlow).filter(DBFlow.org_id == user.get("org_id")).update({DBFlow.status: "inactive"})
+            db.commit()
+        except Exception:
+            db.rollback()
+    row = DBFlow(id=fid, org_id=user.get("org_id"), name=body.name, version=body.version or 1, graph=body.graph if isinstance(body.graph, dict) else None, status=body.status or "draft", created_by=str(user.get("sub")))
+    db.add(row)
+    db.commit()
+    return FlowOut(id=row.id, org_id=row.org_id, name=row.name, version=row.version, graph=row.graph if isinstance(row.graph, dict) else None, status=row.status, created_by=row.created_by)
+
+
+def _load_flow_for_org(db: Session, flow_id: str, org_id: str) -> DBFlow | None:
+    r = db.get(DBFlow, flow_id)
+    if not r or r.org_id != org_id:
+        return None
+    return r
+
+
+@app.get("/api/flows/{flow_id}", response_model=FlowOut)
+def get_flow(flow_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    r = _load_flow_for_org(db, flow_id, user.get("org_id"))
+    if not r:
+        raise HTTPException(status_code=404, detail="flow not found")
+    return FlowOut(id=r.id, org_id=r.org_id, name=r.name, version=r.version, graph=r.graph if isinstance(r.graph, dict) else None, status=r.status, created_by=r.created_by)
+
+
+@app.put("/api/flows/{flow_id}", response_model=FlowOut)
+def update_flow(flow_id: str, body: FlowUpdate, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    r = _load_flow_for_org(db, flow_id, user.get("org_id"))
+    if not r:
+        raise HTTPException(status_code=404, detail="flow not found")
+    # handle publish semantics
+    if body.status == "active":
+        try:
+            db.query(DBFlow).filter(DBFlow.org_id == user.get("org_id")).filter(DBFlow.id != r.id).update({DBFlow.status: "inactive"})
+            db.commit()
+        except Exception:
+            db.rollback()
+    if body.name is not None:
+        r.name = body.name
+    if body.version is not None:
+        r.version = body.version
+    if body.graph is not None:
+        r.graph = body.graph if isinstance(body.graph, dict) else None
+    if body.status is not None:
+        r.status = body.status
+    db.commit()
+    db.refresh(r)
+    return FlowOut(id=r.id, org_id=r.org_id, name=r.name, version=r.version, graph=r.graph if isinstance(r.graph, dict) else None, status=r.status, created_by=r.created_by)
+
+
+@app.delete("/api/flows/{flow_id}")
+def delete_flow(flow_id: str, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    r = _load_flow_for_org(db, flow_id, user.get("org_id"))
+    if not r:
+        raise HTTPException(status_code=404, detail="flow not found")
     db.delete(r)
     db.commit()
     return {"ok": True}

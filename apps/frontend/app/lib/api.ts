@@ -205,6 +205,40 @@ export async function deleteTemplate(token: JWT, id: string) {
   return apiFetch<{ ok: boolean }>(`/api/templates/${id}`, { method: "DELETE" }, token);
 }
 
+// --- Flows ---
+export type Flow = {
+  id: string;
+  org_id: string;
+  name?: string;
+  version?: number;
+  graph?: Record<string, unknown> | null;
+  status?: string;
+  created_by?: string | null;
+};
+
+export async function listFlows(token: JWT) {
+  return apiFetch<Flow[]>("/api/flows", {}, token);
+}
+
+export async function createFlow(
+  token: JWT,
+  body: { name: string; version?: number; graph?: Record<string, unknown>; status?: string }
+) {
+  return apiFetch<Flow>("/api/flows", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function updateFlow(
+  token: JWT,
+  id: string,
+  body: { name?: string; version?: number; graph?: Record<string, unknown>; status?: string }
+) {
+  return apiFetch<Flow>(`/api/flows/${id}`, { method: "PUT", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteFlow(token: JWT, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/flows/${id}`, { method: "DELETE" }, token);
+}
+
 // --- SSE Inbox subscription (via fetch stream) ---
 // EventSource can't send Authorization headers; use fetch streaming instead.
 export function subscribeInbox(token: JWT, onEvent: (data: string) => void) {

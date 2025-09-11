@@ -163,6 +163,47 @@ Notas:
 - Envíos (`POST /api/conversations/{id}/messages`) se publican en `nf:outbox` enriquecidos con `org_id`, `requested_by`, `conversation_id`, `channel_id`, `to`.
 - `GET /api/inbox/stream` está protegido por roles (`admin|agent`).
 
+## Flows (CRUD básico)
+
+- Listar flujos
+
+```http
+GET /api/flows
+Authorization: Bearer <JWT>
+```
+
+- Crear flujo
+
+```http
+POST /api/flows
+Authorization: Bearer <JWT (admin)>
+Content-Type: application/json
+{
+  "name": "Lead Qualifier",
+  "version": 1,
+  "graph": {"nodes": [], "paths": {}},
+  "status": "draft"
+}
+```
+
+- Actualizar flujo (publicar activa y desactiva el resto)
+
+```http
+PUT /api/flows/{id}
+Authorization: Bearer <JWT (admin)>
+Content-Type: application/json
+{
+  "status": "active"
+}
+```
+
+- Eliminar flujo
+
+```http
+DELETE /api/flows/{id}
+Authorization: Bearer <JWT (admin)>
+```
+
 ## SSE Inbox
 
 - cURL:

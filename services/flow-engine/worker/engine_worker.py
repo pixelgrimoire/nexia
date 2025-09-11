@@ -13,39 +13,39 @@ logger.addHandler(handler)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 # Metrics (opt-in via env var to avoid duplicate registration in tests)
- _METRICS_ENABLED = os.getenv("FLOW_ENGINE_METRICS", "false").lower() == "true"
- CONSUMER_GROUP = os.getenv("FLOW_ENGINE_GROUP", "engine")
- CONSUMER_NAME = os.getenv("FLOW_ENGINE_CONSUMER", None) or os.getenv("HOSTNAME", "engine-1")
- try:
-     ENGINE_MAX_RETRIES = int(os.getenv("FLOW_ENGINE_MAX_RETRIES", "2"))
- except Exception:
-     ENGINE_MAX_RETRIES = 2
- try:
-     _SCHED_POLL_MS = int(os.getenv("FLOW_ENGINE_SCHED_POLL_MS", "500"))
- except Exception:
-     _SCHED_POLL_MS = 500
- _SCHED_ZSET = os.getenv("FLOW_ENGINE_SCHED_ZSET", "nf:incoming:scheduled")
+_METRICS_ENABLED = os.getenv("FLOW_ENGINE_METRICS", "false").lower() == "true"
+CONSUMER_GROUP = os.getenv("FLOW_ENGINE_GROUP", "engine")
+CONSUMER_NAME = os.getenv("FLOW_ENGINE_CONSUMER", None) or os.getenv("HOSTNAME", "engine-1")
+try:
+    ENGINE_MAX_RETRIES = int(os.getenv("FLOW_ENGINE_MAX_RETRIES", "2"))
+except Exception:
+    ENGINE_MAX_RETRIES = 2
+try:
+    _SCHED_POLL_MS = int(os.getenv("FLOW_ENGINE_SCHED_POLL_MS", "500"))
+except Exception:
+    _SCHED_POLL_MS = 500
+_SCHED_ZSET = os.getenv("FLOW_ENGINE_SCHED_ZSET", "nf:incoming:scheduled")
 
 class _Noop:
     def inc(self, *args, **kwargs):
         return None
 
- if _METRICS_ENABLED:
-     ENGINE_PROCESSED = Counter('nexia_engine_incoming_processed_total', 'Incoming messages processed')
-     ENGINE_PUBLISHED = Counter('nexia_engine_outbox_published_total', 'Actions published to nf:outbox')
-     ENGINE_ERRORS = Counter('nexia_engine_errors_total', 'Engine errors')
-     ENGINE_RETRIED = Counter('nexia_engine_retries_total', 'Engine message retries')
-     ENGINE_DLQ = Counter('nexia_engine_dlq_total', 'Engine DLQ messages')
-     ENGINE_SCHEDULED = Counter('nexia_engine_scheduled_total', 'Flow events scheduled for later')
-     ENGINE_SCHED_PUBLISHED = Counter('nexia_engine_sched_published_total', 'Scheduled events published back to nf:incoming')
- else:
-     ENGINE_PROCESSED = _Noop()
-     ENGINE_PUBLISHED = _Noop()
-     ENGINE_ERRORS = _Noop()
-     ENGINE_RETRIED = _Noop()
-     ENGINE_DLQ = _Noop()
-     ENGINE_SCHEDULED = _Noop()
-     ENGINE_SCHED_PUBLISHED = _Noop()
+if _METRICS_ENABLED:
+    ENGINE_PROCESSED = Counter('nexia_engine_incoming_processed_total', 'Incoming messages processed')
+    ENGINE_PUBLISHED = Counter('nexia_engine_outbox_published_total', 'Actions published to nf:outbox')
+    ENGINE_ERRORS = Counter('nexia_engine_errors_total', 'Engine errors')
+    ENGINE_RETRIED = Counter('nexia_engine_retries_total', 'Engine message retries')
+    ENGINE_DLQ = Counter('nexia_engine_dlq_total', 'Engine DLQ messages')
+    ENGINE_SCHEDULED = Counter('nexia_engine_scheduled_total', 'Flow events scheduled for later')
+    ENGINE_SCHED_PUBLISHED = Counter('nexia_engine_sched_published_total', 'Scheduled events published back to nf:incoming')
+else:
+    ENGINE_PROCESSED = _Noop()
+    ENGINE_PUBLISHED = _Noop()
+    ENGINE_ERRORS = _Noop()
+    ENGINE_RETRIED = _Noop()
+    ENGINE_DLQ = _Noop()
+    ENGINE_SCHEDULED = _Noop()
+    ENGINE_SCHED_PUBLISHED = _Noop()
 
 try:
     from packages.common.db import SessionLocal  # type: ignore
@@ -122,74 +122,74 @@ async def handle_message(msg_id: str, fields: dict) -> bool:
 		# fallback to a top-level text
 		text = payload.get("text") or payload.get("message") or ""
 
-    # Try to run a configured flow; fall back to heuristic reply
-    published = False
-    try:
-        outs = await _run_flow_minimal(text=text, contact_phone=contact_phone, fields=fields, payload=payload)
-        for out in outs:
-            # ensure minimal enrichment
-            if fields.get("org_id"):
-                out["org_id"] = fields.get("org_id")
-            trace_id = out.get("trace_id") or str(uuid.uuid4())
-            out["trace_id"] = trace_id
-            redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
-            try:
-                ENGINE_PUBLISHED.inc()
-            except Exception:
-                pass
-            logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
-            published = True
-    except Exception:
-        logger.exception("flow execution failed")
-        try:
-            ENGINE_ERRORS.inc()
-        except Exception:
-            pass
+	# Try to run a configured flow; fall back to heuristic reply
+	published = False
+	try:
+		outs = await _run_flow_minimal(text=text, contact_phone=contact_phone, fields=fields, payload=payload)
+		for out in outs:
+			# ensure minimal enrichment
+			if fields.get("org_id"):
+				out["org_id"] = fields.get("org_id")
+			trace_id = out.get("trace_id") or str(uuid.uuid4())
+			out["trace_id"] = trace_id
+			redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
+			try:
+				ENGINE_PUBLISHED.inc()
+			except Exception:
+				pass
+			logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
+			published = True
+	except Exception:
+		logger.exception("flow execution failed")
+		try:
+			ENGINE_ERRORS.inc()
+		except Exception:
+			pass
 
-    if not published:
-        intent = classify_intent(text)
-        # simple action: reply with a template based on intent
-        if intent == "pricing":
-            reply = f"Gracias por preguntar sobre precios. Nuestro plan starter cuesta $9/mes."
-        elif intent == "greeting":
-            reply = "Hola! ¿En qué puedo ayudarte hoy?"
-        else:
-            reply = "Gracias por tu mensaje. Un agente te responderá pronto."
+	if not published:
+		intent = classify_intent(text)
+		# simple action: reply with a template based on intent
+		if intent == "pricing":
+			reply = f"Gracias por preguntar sobre precios. Nuestro plan starter cuesta $9/mes."
+		elif intent == "greeting":
+			reply = "Hola! ¿En qué puedo ayudarte hoy?"
+		else:
+			reply = "Gracias por tu mensaje. Un agente te responderá pronto."
 
-        # publish to outbox (so messaging-gateway will pick it)
-        # include org_id/channel_id when provided by upstream (webhook enrichment)
-        try:
-            trace_id = str(uuid.uuid4())
-            channel = fields.get("channel_id") or "wa_main"
-            to_phone = contact_phone or payload.get("contact", {}).get("phone", "unknown")
-            out = {
-                "channel_id": channel,
-                "to": to_phone,
-                "type": "text",
-                "text": reply,
-                "client_id": f"auto_{int(time.time()*1000)}",
-                "orig_text": text,
-                "trace_id": trace_id,
-            }
-            if fields.get("org_id"):
-                out["org_id"] = fields.get("org_id")
-            # ensure all values are strings for redis stream
-            redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
-            try:
-                ENGINE_PUBLISHED.inc()
-            except Exception:
-                pass
-            # log the published message with trace_id for observability
-            logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
-        except Exception:
-            logger.exception("engine xadd failed")
-            try:
-                ENGINE_ERRORS.inc()
-            except Exception:
-                pass
-            return False
-        return True
-    return True
+		# publish to outbox (so messaging-gateway will pick it)
+		# include org_id/channel_id when provided by upstream (webhook enrichment)
+		try:
+			trace_id = str(uuid.uuid4())
+			channel = fields.get("channel_id") or "wa_main"
+			to_phone = contact_phone or payload.get("contact", {}).get("phone", "unknown")
+			out = {
+				"channel_id": channel,
+				"to": to_phone,
+				"type": "text",
+				"text": reply,
+				"client_id": f"auto_{int(time.time()*1000)}",
+				"orig_text": text,
+				"trace_id": trace_id,
+			}
+			if fields.get("org_id"):
+				out["org_id"] = fields.get("org_id")
+			# ensure all values are strings for redis stream
+			redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
+			try:
+				ENGINE_PUBLISHED.inc()
+			except Exception:
+				pass
+			# log the published message with trace_id for observability
+			logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
+		except Exception:
+			logger.exception("engine xadd failed")
+			try:
+				ENGINE_ERRORS.inc()
+			except Exception:
+				pass
+			return False
+		return True
+	return True
 
 async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, payload: dict) -> list[dict]:
     """Execute a very small subset of a flow definition if available.
@@ -215,7 +215,7 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
                 .first()
             )
     except Exception:
-    row = None
+        row = None
     if not row:
         return []
     graph = getattr(row, "graph", None)
