@@ -107,7 +107,10 @@ export default function FlowsPage() {
 
   return (
     <main className="space-y-4">
-      <h1 className="text-xl font-semibold">Flujos</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Flujos</h1>
+        <a href="/flows/builder" className="text-sm px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50">Abrir Builder</a>
+      </div>
       {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       {error && <p className="text-red-600">{error}</p>}
       {loading ? (
@@ -156,4 +159,3 @@ export default function FlowsPage() {
     </main>
   );
 }
-

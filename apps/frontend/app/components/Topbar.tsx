@@ -6,9 +6,11 @@ import Link from "next/link";
 import Toast from "../components/Toast";
 import { setupGSAP, gsap } from "../lib/gsapSetup";
 import { useGSAP } from "@gsap/react";
+import { usePathname } from "next/navigation";
 
 export default function Topbar() {
   const [email, setEmail] = useState<string | null>(null);
+  const [role, setRole] = useState<"admin" | "agent" | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unread, setUnread] = useState<number>(0);
@@ -21,7 +23,11 @@ export default function Topbar() {
     const t = getAccessToken();
     if (!t) return;
     getMe(t as JWT)
-      .then((u) => setEmail(String((u as any)?.email || "")))
+      .then((u) => {
+        setEmail(String((u as any)?.email || ""));
+        const r = String((u as any)?.role || "");
+        if (r === "admin" || r === "agent") setRole(r as any);
+      })
       .catch(() => setEmail(null));
     // initial unread
     listConversations(t as JWT, { include_unread: true, limit: 200 })
@@ -42,6 +48,13 @@ export default function Topbar() {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, []);
+
+  const pathname = usePathname();
+  const isActive = (href: string) => {
+    if (!pathname) return false;
+    if (href === "/") return pathname === "/";
+    return pathname.startsWith(href);
+  };
   setupGSAP();
   useGSAP(() => {
     if (!dotRef.current) return;
@@ -82,13 +95,22 @@ export default function Topbar() {
     <>
     <header className="mb-4 flex items-center justify-between">
       <nav className="flex items-center gap-4">
-        <Link href="/" className="font-semibold">NexIA</Link>
-        <Link href="/inbox" className="text-slate-700 hover:underline">Inbox{unread > 0 ? <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-xs align-middle">{unread}</span> : null}</Link>
-        <Link href="/conversations" className="text-slate-700 hover:underline">Conversaciones</Link>
-        <Link href="/channels" className="text-slate-700 hover:underline">Canales</Link>
-        <Link href="/connect" className="text-slate-700 hover:underline">Connect</Link>
-        <Link href="/templates" className="text-slate-700 hover:underline">Plantillas</Link>
-        <Link href="/flows" className="text-slate-700 hover:underline">Flujos</Link>
+        <Link href="/" className={`font-semibold ${isActive("/") ? "underline" : ""}`}>NexIA</Link>
+        {/* Agent & Admin */}
+        <Link href="/inbox" className={`text-slate-700 hover:underline ${isActive("/inbox") ? "font-semibold underline" : ""}`} aria-current={isActive("/inbox") ? "page" : undefined}>
+          Inbox{unread > 0 ? <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-xs align-middle">{unread}</span> : null}
+        </Link>
+        <Link href="/conversations" className={`text-slate-700 hover:underline ${isActive("/conversations") ? "font-semibold underline" : ""}`} aria-current={isActive("/conversations") ? "page" : undefined}>Conversaciones</Link>
+        <Link href="/contacts" className={`text-slate-700 hover:underline ${isActive("/contacts") ? "font-semibold underline" : ""}`} aria-current={isActive("/contacts") ? "page" : undefined}>Contactos</Link>
+        {/* Admin-only */}
+        {(role === "admin" || role === null) && (
+          <>
+            <Link href="/channels" className={`text-slate-700 hover:underline ${isActive("/channels") ? "font-semibold underline" : ""}`} aria-current={isActive("/channels") ? "page" : undefined}>Canales</Link>
+            <Link href="/connect" className={`text-slate-700 hover:underline ${isActive("/connect") ? "font-semibold underline" : ""}`} aria-current={isActive("/connect") ? "page" : undefined}>Connect</Link>
+            <Link href="/templates" className={`text-slate-700 hover:underline ${isActive("/templates") ? "font-semibold underline" : ""}`} aria-current={isActive("/templates") ? "page" : undefined}>Plantillas</Link>
+            <Link href="/flows" className={`text-slate-700 hover:underline ${isActive("/flows") ? "font-semibold underline" : ""}`} aria-current={isActive("/flows") ? "page" : undefined}>Flujos</Link>
+          </>
+        )}
         <span className="inline-flex items-center gap-1 text-xs text-slate-500">
           <span
             ref={dotRef}

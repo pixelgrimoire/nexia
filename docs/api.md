@@ -199,6 +199,39 @@ Content-Type: application/json
 
 - Eliminar flujo
 
+## Contacts (CRUD)
+
+- Crear contacto
+
+```http
+POST /api/contacts
+Authorization: Bearer <JWT>
+Content-Type: application/json
+{
+  "name": "Ana",
+  "phone": "+5215550001111",
+  "wa_id": "5215550001111",
+  "tags": ["lead"],
+  "attributes": {"source": "web"}
+}
+```
+
+- Listar/obtener/actualizar/borrar
+
+```http
+GET /api/contacts
+GET /api/contacts/{id}
+PUT /api/contacts/{id}
+DELETE /api/contacts/{id}
+```
+
+- Buscar (in-memory):
+
+```http
+GET /api/contacts/search?tags=vip&tags=lead&attr_key=source&attr_value=web
+Authorization: Bearer <JWT>
+```
+
 ```http
 DELETE /api/flows/{id}
 Authorization: Bearer <JWT (admin)>

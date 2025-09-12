@@ -22,7 +22,7 @@ from packages.common.models import (
 )
 import bcrypt
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse
 import http.client
 from prometheus_client import CollectorRegistry, Counter, generate_latest, CONTENT_TYPE_LATEST
@@ -1364,3 +1364,212 @@ def delete_flow(flow_id: str, user: dict = require_roles(Role.admin), db: Sessio
     db.delete(r)
     db.commit()
     return {"ok": True}
+
+# ----------------------------------------------------------------------------
+# Contacts (CRUD + simple search) — mirrors services/contacts for convenience
+
+try:
+    from pydantic import ConfigDict  # type: ignore
+    _MODEL_CONFIG = ConfigDict(from_attributes=True)
+except Exception:
+    _MODEL_CONFIG = None
+
+
+class ContactBase(BaseModel):
+    org_id: str | None = None
+    wa_id: str | None = None
+    phone: str | None = None
+    name: str | None = None
+    attributes: dict | None = None
+    tags: list[str] | None = None
+    consent: str | None = None
+    locale: str | None = None
+    timezone: str | None = None
+
+
+class ContactCreate(ContactBase):
+    id: str | None = None
+
+
+class ContactUpdate(BaseModel):
+    wa_id: str | None = None
+    phone: str | None = None
+    name: str | None = None
+    attributes: dict | None = None
+    tags: list[str] | None = None
+    consent: str | None = None
+    locale: str | None = None
+    timezone: str | None = None
+
+
+class ContactOut(ContactBase):
+    id: str
+
+    if _MODEL_CONFIG is not None:
+        model_config = _MODEL_CONFIG
+    else:
+        class Config:  # type: ignore
+            orm_mode = True
+
+
+@app.post("/api/contacts", response_model=ContactOut, status_code=201)
+def create_contact(payload: ContactCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    cid = payload.id or str(uuid4())
+    token_org = str(user.get("org_id"))
+    # Enforce org from token; prevent cross-org writes
+    if payload.org_id and payload.org_id != token_org:
+        raise HTTPException(status_code=403, detail="forbidden: org mismatch")
+    org_id = payload.org_id or token_org
+    contact = Contact(
+        id=cid,
+        org_id=org_id,
+        wa_id=payload.wa_id,
+        phone=payload.phone,
+        name=payload.name,
+        attributes=payload.attributes or {},
+        tags=payload.tags or [],
+        consent=payload.consent,
+        locale=payload.locale,
+        timezone=payload.timezone,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    return ContactOut(
+        id=contact.id,
+        org_id=contact.org_id,
+        wa_id=contact.wa_id,
+        phone=contact.phone,
+        name=contact.name,
+        attributes=contact.attributes,
+        tags=contact.tags,
+        consent=contact.consent,
+        locale=contact.locale,
+        timezone=contact.timezone,
+    )
+
+
+@app.get("/api/contacts", response_model=list[ContactOut])
+def list_contacts(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    rows = db.query(Contact).filter(Contact.org_id == user.get("org_id")).all()
+    out: list[ContactOut] = []
+    for c in rows:
+        out.append(ContactOut(
+            id=c.id,
+            org_id=c.org_id,
+            wa_id=c.wa_id,
+            phone=c.phone,
+            name=c.name,
+            attributes=getattr(c, 'attributes', None) or {},
+            tags=getattr(c, 'tags', None) or [],
+            consent=getattr(c, 'consent', None),
+            locale=getattr(c, 'locale', None),
+            timezone=getattr(c, 'timezone', None),
+        ))
+    return out
+
+
+def _load_contact_for_org(db: Session, contact_id: str, org_id: str) -> Contact | None:
+    try:
+        c = db.get(Contact, contact_id)
+    except Exception:
+        c = None
+    if not c or str(getattr(c, 'org_id', None)) != str(org_id):
+        return None
+    return c
+
+
+@app.get("/api/contacts/{contact_id}", response_model=ContactOut)
+def get_contact(contact_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    c = _load_contact_for_org(db, contact_id, user.get("org_id"))
+    if not c:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return ContactOut(
+        id=c.id,
+        org_id=c.org_id,
+        wa_id=c.wa_id,
+        phone=c.phone,
+        name=c.name,
+        attributes=c.attributes,
+        tags=c.tags,
+        consent=c.consent,
+        locale=c.locale,
+        timezone=c.timezone,
+    )
+
+
+@app.put("/api/contacts/{contact_id}", response_model=ContactOut)
+def update_contact(contact_id: str, payload: ContactUpdate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    c = _load_contact_for_org(db, contact_id, user.get("org_id"))
+    if not c:
+        raise HTTPException(status_code=404, detail="contact not found")
+    # Use model_dump when running Pydantic v2, fall back to dict() for v1.
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump(exclude_unset=True)
+    else:
+        data = payload.dict(exclude_unset=True)
+    for field, value in data.items():
+        setattr(c, field, value)
+    db.commit()
+    db.refresh(c)
+    return ContactOut(
+        id=c.id,
+        org_id=c.org_id,
+        wa_id=c.wa_id,
+        phone=c.phone,
+        name=c.name,
+        attributes=c.attributes,
+        tags=c.tags,
+        consent=c.consent,
+        locale=c.locale,
+        timezone=c.timezone,
+    )
+
+
+@app.delete("/api/contacts/{contact_id}")
+def delete_contact(contact_id: str, user: dict = require_roles(Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    c = _load_contact_for_org(db, contact_id, user.get("org_id"))
+    if not c:
+        raise HTTPException(status_code=404, detail="contact not found")
+    db.delete(c)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/contacts/search", response_model=list[ContactOut])
+def search_contacts(
+    tags: List[str] | None = None,
+    attr_key: str | None = None,
+    attr_value: str | None = None,
+    user: dict = require_roles(Role.admin, Role.agent),
+    db: Session = Depends(lambda: SessionLocal()),
+):
+    rows = db.query(Contact).filter(Contact.org_id == user.get("org_id")).all()
+    # in-memory filters (MVP)
+    if tags:
+        rows = [c for c in rows if set(tags).issubset(set((getattr(c, 'tags', None) or [])))]
+    if attr_key and attr_value:
+        tmp: list[Any] = []
+        for c in rows:
+            attrs = getattr(c, 'attributes', None) or {}
+            try:
+                if str(attrs.get(attr_key)) == attr_value:
+                    tmp.append(c)
+            except Exception:
+                pass
+        rows = tmp
+    out: list[ContactOut] = []
+    for c in rows:
+        out.append(ContactOut(
+            id=c.id,
+            org_id=c.org_id,
+            wa_id=c.wa_id,
+            phone=c.phone,
+            name=c.name,
+            attributes=getattr(c, 'attributes', None) or {},
+            tags=getattr(c, 'tags', None) or [],
+            consent=getattr(c, 'consent', None),
+            locale=getattr(c, 'locale', None),
+            timezone=getattr(c, 'timezone', None),
+        ))
+    return out

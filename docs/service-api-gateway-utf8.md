@@ -56,3 +56,17 @@ Notas de API
 - Paginación: `GET /api/conversations/{id}/messages` ordena por `created_at` si existe; si no, por `id`.
 - Idempotencia: cabecera `Idempotency-Key` soportada en `POST /api/messages/send` y `POST /api/conversations/{id}/messages`.
 - Status interno: `GET /internal/status` expone contadores de rate limit e idempotencia.
+
+Contactos (CRUD)
+----------------
+
+- `POST /api/contacts` — crea un contacto para la organización del token. Rechaza `org_id` distinto.
+- `GET /api/contacts` — lista contactos de la organización.
+- `GET /api/contacts/{id}` — obtiene un contacto de la organización.
+- `PUT /api/contacts/{id}` — actualiza campos (`name`, `phone`, `wa_id`, `tags`, `attributes`, etc.).
+- `DELETE /api/contacts/{id}` — elimina el contacto (requiere rol `admin`).
+- `GET /api/contacts/search` — filtros in‑memory: `tags[]=...`, `attr_key`, `attr_value`.
+
+Notas:
+- Todos los endpoints requieren JWT y roles `admin|agent` (DELETE sólo `admin`).
+- El scoping por `org_id` está aplicado en todas las rutas.

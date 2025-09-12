@@ -89,6 +89,18 @@ export async function listConversations(token: JWT, params?: { state?: string; l
   return apiFetch<Conversation[]>(`/api/conversations?${qs.toString()}`, {}, token);
 }
 
+export async function getConversation(token: JWT, id: string) {
+  return apiFetch<Conversation>(`/api/conversations/${id}`, {}, token);
+}
+
+export async function updateConversation(
+  token: JWT,
+  id: string,
+  body: { state?: string; assignee?: string | null }
+) {
+  return apiFetch<Conversation>(`/api/conversations/${id}`, { method: "PUT", body: JSON.stringify(body) }, token);
+}
+
 export type Message = {
   id: string;
   conversation_id: string;
@@ -237,6 +249,58 @@ export async function updateFlow(
 
 export async function deleteFlow(token: JWT, id: string) {
   return apiFetch<{ ok: boolean }>(`/api/flows/${id}`, { method: "DELETE" }, token);
+}
+
+// --- Contacts ---
+export type Contact = {
+  id: string;
+  org_id: string;
+  wa_id?: string | null;
+  phone?: string | null;
+  name?: string | null;
+  attributes?: Record<string, unknown> | null;
+  tags?: string[] | null;
+  consent?: string | null;
+  locale?: string | null;
+  timezone?: string | null;
+};
+
+export async function listContacts(token: JWT) {
+  return apiFetch<Contact[]>("/api/contacts", {}, token);
+}
+
+export async function searchContacts(
+  token: JWT,
+  params?: { tags?: string[]; attr_key?: string; attr_value?: string }
+) {
+  const qs = new URLSearchParams();
+  if (params?.tags && params.tags.length) for (const t of params.tags) qs.append("tags", t);
+  if (params?.attr_key) qs.set("attr_key", params.attr_key);
+  if (params?.attr_value) qs.set("attr_value", params.attr_value);
+  return apiFetch<Contact[]>(`/api/contacts/search?${qs.toString()}`, {}, token);
+}
+
+export async function createContact(
+  token: JWT,
+  body: { org_id?: string; wa_id?: string; phone?: string; name?: string; attributes?: Record<string, unknown>; tags?: string[]; consent?: string; locale?: string; timezone?: string }
+) {
+  return apiFetch<Contact>("/api/contacts", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function getContact(token: JWT, id: string) {
+  return apiFetch<Contact>(`/api/contacts/${id}`, {}, token);
+}
+
+export async function updateContact(
+  token: JWT,
+  id: string,
+  body: { wa_id?: string; phone?: string; name?: string; attributes?: Record<string, unknown>; tags?: string[]; consent?: string; locale?: string; timezone?: string }
+) {
+  return apiFetch<Contact>(`/api/contacts/${id}`, { method: "PUT", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteContact(token: JWT, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/contacts/${id}`, { method: "DELETE" }, token);
 }
 
 // --- SSE Inbox subscription (via fetch stream) ---

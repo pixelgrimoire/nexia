@@ -9,6 +9,9 @@ import {
   sendMessage,
   type Message,
   subscribeInbox,
+  getConversation,
+  updateConversation,
+  type Conversation,
 } from "../../lib/api";
 import { getAccessToken } from "../../lib/auth";
 
@@ -20,6 +23,7 @@ export default function ConversationDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
+  const [convMeta, setConvMeta] = useState<Conversation | null>(null);
   const [text, setText] = useState("");
   const [msgType, setMsgType] = useState<"text" | "template" | "media">("text");
   const [tplName, setTplName] = useState("");
@@ -42,6 +46,8 @@ export default function ConversationDetailPage() {
     setLoading(true);
     setError(null);
     try {
+      const meta = await getConversation(token, convId);
+      setConvMeta(meta);
       const data = await listMessages(token, convId, { limit: 50 });
       setMsgs(data);
     } catch (e: any) {
@@ -116,9 +122,44 @@ export default function ConversationDetailPage() {
     }
   };
 
+  const [savingConv, setSavingConv] = useState(false);
+  const [nextState, setNextState] = useState<string>("open");
+  const [nextAssignee, setNextAssignee] = useState<string>("");
+
+  useEffect(() => {
+    if (!convMeta) return;
+    setNextState(convMeta.state || "open");
+    setNextAssignee(convMeta.assignee || "");
+  }, [convMeta]);
+
+  const onSaveConv = async () => {
+    if (!token || !convId) return;
+    setSavingConv(true);
+    setError(null);
+    try {
+      const r = await updateConversation(token, convId, { state: nextState, assignee: nextAssignee || null });
+      setConvMeta(r);
+      setToast({ msg: "Conversación actualizada", type: "success" });
+    } catch (e: any) {
+      setError(e?.message || "Error actualizando conversación");
+      setToast({ msg: "Error actualizando conversación", type: "error" });
+    } finally {
+      setSavingConv(false);
+    }
+  };
+
   return (
     <main className="space-y-4">
-      <h1 className="text-xl font-semibold">Conversación {convId}</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Conversación {convId}</h1>
+        {convMeta && (
+          <div className="flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">{convMeta.channel_id}</span>
+            {convMeta.state ? <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">{convMeta.state}</span> : null}
+            {convMeta.assignee ? <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">{convMeta.assignee}</span> : null}
+          </div>
+        )}
+      </div>
       {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       {error && <p className="text-red-600">{error}</p>}
       {loading ? (
@@ -148,6 +189,29 @@ export default function ConversationDetailPage() {
             ))}
           </ul>
           </div>
+          <section className="space-y-2">
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="block text-xs text-slate-600">Estado</label>
+                <select value={nextState} onChange={(e) => setNextState(e.target.value)} className="border border-slate-300 rounded px-3 py-2 text-sm">
+                  <option value="open">open</option>
+                  <option value="pending">pending</option>
+                  <option value="closed">closed</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-600">Asignado a</label>
+                <input value={nextAssignee} onChange={(e) => setNextAssignee(e.target.value)} placeholder="usuario o email" className="border border-slate-300 rounded px-3 py-2 text-sm" />
+              </div>
+              <button type="button" onClick={onSaveConv} disabled={savingConv} className="px-3 py-2 rounded border border-slate-300 text-sm">
+                {savingConv ? "Guardando…" : "Guardar"}
+              </button>
+              {nextState !== "closed" && (
+                <button type="button" onClick={() => { setNextState("closed"); onSaveConv(); }} className="px-3 py-2 rounded border border-red-300 text-red-700 text-sm">Cerrar</button>
+              )}
+            </div>
+          </section>
+
           <form onSubmit={onSend} className="space-y-2">
             <div className="flex gap-2 items-center">
               <select value={msgType} onChange={(e) => setMsgType(e.target.value as any)} className="border border-slate-300 rounded px-3 py-2">

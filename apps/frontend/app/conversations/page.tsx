@@ -6,10 +6,12 @@ import {
   type JWT,
   listConversations,
   listChannels,
+  listContacts,
   createConversation,
   createChannel,
   type Conversation,
   type Channel,
+  type Contact,
 } from "../lib/api";
 import { getAccessToken } from "../lib/auth";
 
@@ -20,9 +22,11 @@ export default function ConversationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
 
   // form state
   const [contactId, setContactId] = useState("");
+  const [contactQuery, setContactQuery] = useState("");
   const [channelId, setChannelId] = useState("");
   const [creating, setCreating] = useState(false);
   const [creatingChannel, setCreatingChannel] = useState(false);
@@ -39,13 +43,15 @@ export default function ConversationsPage() {
       setLoading(true);
       setError(null);
       try {
-        const [cList, chList] = await Promise.all([
+        const [cList, chList, ctList] = await Promise.all([
           listConversations(token, { limit: 50, include_unread: true }),
           listChannels(token),
+          listContacts(token),
         ]);
         if (!cancelled) {
           setConvs(cList);
           setChannels(chList);
+          setContacts(ctList);
           if (chList.length > 0) setChannelId(chList[0].id);
         }
       } catch (e: any) {
@@ -72,14 +78,17 @@ export default function ConversationsPage() {
     setCreating(true);
     setError(null);
     try {
+      const contactValue = (contactId || contactQuery).trim();
+      if (!contactValue) throw new Error("Contacto requerido");
       const conv = await createConversation(token, {
-        contact_id: contactId.trim(),
+        contact_id: contactValue,
         channel_id: channelId.trim(),
       });
       // refresh list
       const next = await listConversations(token, { limit: 50 });
       setConvs(next);
       setContactId("");
+      setContactQuery("");
     } catch (e: any) {
       setError(e?.message || "Error creando conversación");
     } finally {
@@ -163,17 +172,52 @@ export default function ConversationsPage() {
               )}
             </div>
             <form onSubmit={onCreateConv} className="space-y-2">
-              <label className="block text-sm font-medium">Contacto (ID o phone)</label>
-              <input
-                value={contactId}
-                onChange={(e) => setContactId(e.target.value)}
-                required
-                placeholder="ct_123 o +521555..."
-                className="block w-full border border-slate-300 rounded px-3 py-2"
-              />
+              <label className="block text-sm font-medium">Contacto</label>
+              <div className="relative">
+                <input
+                  value={contactQuery}
+                  onChange={(e) => { setContactQuery(e.target.value); setContactId(""); }}
+                  placeholder="Busca por nombre, phone o wa_id (o pega un phone)"
+                  className="block w-full border border-slate-300 rounded px-3 py-2"
+                  autoComplete="off"
+                />
+                {contactQuery.trim().length > 0 && (
+                  <ul className="absolute z-10 mt-1 w-full max-h-56 overflow-auto bg-white border border-slate-200 rounded shadow-sm">
+                    {contacts
+                      .filter((c) => {
+                        const n = contactQuery.trim().toLowerCase();
+                        const fields = [c.id, c.name || "", c.phone || "", c.wa_id || ""];
+                        return fields.some((f) => f.toLowerCase().includes(n));
+                      })
+                      .slice(0, 8)
+                      .map((c) => (
+                        <li key={c.id}>
+                          <button
+                            type="button"
+                            onClick={() => { setContactId(c.id); setContactQuery(c.name || c.phone || c.wa_id || c.id); }}
+                            className={`w-full text-left px-3 py-2 hover:bg-slate-50 ${contactId === c.id ? 'bg-slate-50' : ''}`}
+                          >
+                            <span className="font-medium mr-2">{c.name || c.phone || c.wa_id || c.id}</span>
+                            <span className="text-slate-600 text-xs">{c.phone || "-"} · {c.wa_id || "-"}</span>
+                          </button>
+                        </li>
+                      ))}
+                    {contacts.filter((c) => {
+                      const n = contactQuery.trim().toLowerCase();
+                      const fields = [c.id, c.name || "", c.phone || "", c.wa_id || ""];
+                      return fields.some((f) => f.toLowerCase().includes(n));
+                    }).length === 0 && (
+                      <li className="px-3 py-2 text-sm text-slate-600">Sin coincidencias. Puedes pegar un phone.</li>
+                    )}
+                  </ul>
+                )}
+              </div>
+              {contactId && (
+                <div className="text-xs text-slate-600">Seleccionado: <span className="font-mono">{contactQuery}</span> <button type="button" className="ml-2 underline" onClick={() => { setContactId(""); setContactQuery(""); }}>quitar</button></div>
+              )}
               <button
                 type="submit"
-                disabled={creating || !channelId}
+                disabled={creating || !channelId || (!contactId && !contactQuery.trim())}
                 className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60"
               >
                 {creating ? "Creando…" : "Crear"}
