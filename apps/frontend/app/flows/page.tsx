@@ -63,6 +63,40 @@ export default function FlowsPage() {
     setLoading(false);
   };
 
+  const onCreateDemo = async () => {
+    if (!token) return;
+    setError(null);
+    try {
+      const demo = {
+        name: "Wait Reply Demo",
+        version: 1,
+        status: "active",
+        graph: {
+          name: "Wait Reply Demo",
+          nodes: [
+            { id: "i1", type: "intent", map: { greeting: "path_welcome", default: "path_welcome" } },
+          ],
+          paths: {
+            path_welcome: [
+              { type: "action", action: "send_text", text: "Hola! Envíame un código de 6 dígitos." },
+              { type: "wait_for_reply", pattern: "\\\\d{6}", seconds: 30, timeout_path: "path_timeout" },
+              { type: "action", action: "send_text", text: "¡Código recibido! Gracias." },
+              { type: "action", action: "webhook", data: { event: "code_received" } },
+            ],
+            path_timeout: [
+              { type: "action", action: "send_text", text: "No recibí tu código. ¿Podemos intentar de nuevo?" },
+            ],
+          },
+        },
+      } as any;
+      await createFlow(token, demo);
+      await refresh();
+      setToast({ msg: "Flujo demo creado y activado", type: "success" });
+    } catch (e: any) {
+      setToast({ msg: e?.message || "Error creando flujo demo", type: "error" });
+    }
+  };
+
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
@@ -109,7 +143,10 @@ export default function FlowsPage() {
     <main className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Flujos</h1>
-        <a href="/flows/builder" className="text-sm px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50">Abrir Builder</a>
+        <div className="flex items-center gap-2">
+          <button onClick={onCreateDemo} className="text-sm px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Crear Flujo Demo</button>
+          <a href="/flows/builder" className="text-sm px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50">Abrir Builder</a>
+        </div>
       </div>
       {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       {error && <p className="text-red-600">{error}</p>}

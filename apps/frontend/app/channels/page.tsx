@@ -26,6 +26,7 @@ export default function ChannelsPage() {
   const [creating, setCreating] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
+  const [waToken, setWaToken] = useState("");
 
   useEffect(() => {
     const t = getAccessToken() as JWT | null;
@@ -69,12 +70,16 @@ export default function ChannelsPage() {
         mode: "cloud",
         status,
         phone_number: phone.trim() || undefined,
-        credentials: pnid.trim() ? { phone_number_id: pnid.trim() } : undefined,
+        credentials: {
+          ...(pnid.trim() ? { phone_number_id: pnid.trim() } : {}),
+          ...(waToken.trim() ? { access_token: waToken.trim() } : {}),
+        },
       });
       const data = await listChannels(token);
       setChannels(data);
       setPhone("");
       setPnid("");
+      setWaToken("");
       setToast({ msg: "Canal creado", type: "success" });
     } catch (e: any) {
       setError(e?.message || "Error creando canal");
@@ -140,9 +145,13 @@ export default function ChannelsPage() {
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+5215550001111" className="mt-1 block w-full border border-slate-300 rounded px-3 py-2" />
               </div>
               <div>
-                <label className="block text-sm font-medium">phone_number_id</label>
-                <input value={pnid} onChange={(e) => setPnid(e.target.value)} placeholder="123456789012345" className="mt-1 block w-full border border-slate-300 rounded px-3 py-2" />
-              </div>
+              <label className="block text-sm font-medium">phone_number_id</label>
+              <input value={pnid} onChange={(e) => setPnid(e.target.value)} placeholder="123456789012345" className="mt-1 block w-full border border-slate-300 rounded px-3 py-2" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium">Access Token (WA Cloud)</label>
+              <input value={waToken} onChange={(e) => setWaToken(e.target.value)} placeholder="****" type="password" className="mt-1 block w-full border border-slate-300 rounded px-3 py-2" />
+            </div>
               <div>
                 <label className="block text-sm font-medium">Estado</label>
                 <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 block w-full border border-slate-300 rounded px-3 py-2">

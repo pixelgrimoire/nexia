@@ -8,3 +8,4 @@ python-dotenv==1.0.1
 pyjwt==2.9.0
 bcrypt==4.2.0
 prometheus-client==0.20.0
+minio==7.2.10

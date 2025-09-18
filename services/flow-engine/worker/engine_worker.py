@@ -1,4 +1,4 @@
-import os, json, time, asyncio, logging, uuid
+import os, json, time, asyncio, logging, uuid, re
 from prometheus_client import Counter, start_http_server
 from pythonjsonlogger import json as jsonlogger
 from redis import Redis
@@ -25,6 +25,7 @@ try:
 except Exception:
     _SCHED_POLL_MS = 500
 _SCHED_ZSET = os.getenv("FLOW_ENGINE_SCHED_ZSET", "nf:incoming:scheduled")
+_WAIT_PREFIX = os.getenv("FLOW_ENGINE_WAIT_PREFIX", "fe:wait")
 
 class _Noop:
     def inc(self, *args, **kwargs):
@@ -122,10 +123,50 @@ async def handle_message(msg_id: str, fields: dict) -> bool:
 		# fallback to a top-level text
 		text = payload.get("text") or payload.get("message") or ""
 
-	# Try to run a configured flow; fall back to heuristic reply
-	published = False
-	try:
-		outs = await _run_flow_minimal(text=text, contact_phone=contact_phone, fields=fields, payload=payload)
+    # If there's a waiting rule for this contact, check match and optionally resume
+    org_id = fields.get("org_id")
+    channel_id = fields.get("channel_id") or "wa_main"
+    waited = False
+    if org_id and (contact_phone or payload.get("contact", {}).get("phone")):
+        target_phone = contact_phone or payload.get("contact", {}).get("phone")
+        wkey = f"{_WAIT_PREFIX}:{org_id}:{channel_id}:{target_phone}"
+        try:
+            raw = redis.get(wkey)
+        except Exception:
+            raw = None
+        if raw:
+            waited = True
+            try:
+                cfg = json.loads(raw)
+            except Exception:
+                cfg = None
+            matched = True
+            patt = None
+            try:
+                patt = cfg.get("pattern") if isinstance(cfg, dict) else None
+            except Exception:
+                patt = None
+            if patt:
+                try:
+                    matched = bool(re.search(str(patt), text or "", re.IGNORECASE))
+                except Exception:
+                    matched = False
+            if matched and isinstance(cfg, dict):
+                # clear wait and resume flow at stored path/index
+                try:
+                    redis.delete(wkey)
+                except Exception:
+                    pass
+                resume = {"path": cfg.get("path"), "index": int(cfg.get("index") or 0)}
+                fields["engine_resume"] = json.dumps(resume)
+            else:
+                # still waiting: suppress default replies
+                return True
+
+    # Try to run a configured flow; fall back to heuristic reply
+    published = False
+    try:
+        outs = await _run_flow_minimal(text=text, contact_phone=contact_phone, fields=fields, payload=payload)
 		for out in outs:
 			# ensure minimal enrichment
 			if fields.get("org_id"):
@@ -146,8 +187,8 @@ async def handle_message(msg_id: str, fields: dict) -> bool:
 		except Exception:
 			pass
 
-	if not published:
-		intent = classify_intent(text)
+    if not published:
+        intent = classify_intent(text)
 		# simple action: reply with a template based on intent
 		if intent == "pricing":
 			reply = f"Gracias por preguntar sobre precios. Nuestro plan starter cuesta $9/mes."
@@ -273,6 +314,46 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
         if not isinstance(step, dict):
             break
         stype = step.get("type")
+        if stype == "wait_for_reply":
+            # Store a waiting rule for this contact and schedule an optional timeout resume
+            pattern = step.get("pattern")
+            seconds = 0
+            try:
+                seconds = int(step.get("seconds") or step.get("timeout_seconds") or 0)
+            except Exception:
+                seconds = 0
+            resume_token = str(uuid.uuid4())
+            # Next index to continue when reply arrives
+            next_index = idx + 1
+            # Optionally a timeout path (start at 0)
+            timeout_path = step.get("timeout_path")
+            # Persist wait state with TTL
+            try:
+                wkey = f"{_WAIT_PREFIX}:{org_id}:{channel}:{to_phone}"
+                record = {
+                    "path": path_key,
+                    "index": next_index,
+                    "pattern": pattern,
+                    "resume_token": resume_token,
+                    "org_id": str(org_id or ""),
+                    "channel_id": channel,
+                    "contact_phone": to_phone,
+                    "timeout_path": timeout_path,
+                }
+                redis.set(wkey, json.dumps(record), ex=max(1, seconds or 3600))
+            except Exception:
+                logger.exception("failed to set wait state")
+            # Schedule a timeout resume when seconds > 0
+            if seconds and seconds > 0:
+                try:
+                    if timeout_path:
+                        await _schedule_resume(fields=fields, payload=payload, path_key=timeout_path, next_index=0, delay_seconds=seconds, contact_phone=contact_phone, resume_token=resume_token)
+                    else:
+                        await _schedule_resume(fields=fields, payload=payload, path_key=path_key, next_index=next_index, delay_seconds=seconds, contact_phone=contact_phone, resume_token=resume_token)
+                except Exception:
+                    logger.exception("schedule timeout for wait_for_reply failed")
+            # Stop processing further steps now
+            break
         if stype == "set_attribute":
             # Update contact.attributes[key] = value (best-effort)
             key = step.get("key")
@@ -320,6 +401,29 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
         elif act == "send_media":
             media = step.get("media") or {"kind": "image", "link": step.get("asset") or "https://example.com/demo.jpg"}
             outputs.append({**base, "type": "media", "media": json.dumps(media)})
+        elif act == "webhook":
+            # Publish a flow webhook event for external systems (best-effort)
+            try:
+                evt = {
+                    "org_id": str(org_id or ""),
+                    "type": "flow.webhook",
+                    "event_id": str(uuid.uuid4()),
+                    "ts": str(int(time.time() * 1000)),
+                    "body": json.dumps({
+                        "flow_id": getattr(row, 'id', None),
+                        "path": path_key,
+                        "step_index": idx,
+                        "data": step.get("data") or step.get("payload") or {},
+                        "input_text": text,
+                        "contact_phone": to_phone,
+                        "channel_id": channel,
+                    }),
+                }
+                redis.xadd("nf:webhooks", evt)
+            except Exception:
+                logger.exception("flow webhook publish failed")
+            # continue chain
+            continue
         else:
             # unsupported action -> stop
             break
@@ -344,7 +448,7 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
         logger.exception("flow_run persist failed")
     return outputs
 
-async def _schedule_resume(fields: dict, payload: dict, path_key: str, next_index: int, delay_seconds: int, contact_phone: str | None):
+async def _schedule_resume(fields: dict, payload: dict, path_key: str, next_index: int, delay_seconds: int, contact_phone: str | None, resume_token: str | None = None):
     try:
         due_at = int(time.time()) + int(delay_seconds)
         item = {
@@ -354,6 +458,7 @@ async def _schedule_resume(fields: dict, payload: dict, path_key: str, next_inde
             # stash contact phone to avoid re-parsing webhook payload later
             "contact_phone": contact_phone or "",
             "engine_resume": json.dumps({"path": path_key, "index": next_index}),
+            **({"resume_token": resume_token} if resume_token else {}),
         }
         redis.zadd(_SCHED_ZSET, {json.dumps(item): due_at})
         try:
@@ -487,6 +592,24 @@ async def scheduler_loop():
                     obj = None
                 if not isinstance(obj, dict):
                     continue
+                # Skip if waiting state cleared or token mismatch (reply already arrived)
+                try:
+                    if obj.get("resume_token"):
+                        wkey = f"{_WAIT_PREFIX}:{obj.get('org_id') or ''}:{obj.get('channel_id') or 'wa_main'}:{obj.get('contact_phone') or ''}"
+                        raw_state = redis.get(wkey)
+                        if not raw_state:
+                            # already handled or expired
+                            continue
+                        st = json.loads(raw_state)
+                        if st.get("resume_token") != obj.get("resume_token"):
+                            continue
+                        # clear state on timeout resume
+                        try:
+                            redis.delete(wkey)
+                        except Exception:
+                            pass
+                except Exception:
+                    logger.exception("wait state check failed")
                 mapping = {
                     "payload": obj.get("payload") or "",
                     "org_id": obj.get("org_id") or "",

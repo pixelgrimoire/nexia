@@ -4,7 +4,7 @@ import httpx
 from pythonjsonlogger import json as jsonlogger
 from redis import Redis
 from packages.common.db import SessionLocal
-from packages.common.models import Message as DBMessage, Conversation as DBConversation, Contact as DBContact
+from packages.common.models import Message as DBMessage, Conversation as DBConversation, Contact as DBContact, Channel as DBChannel
 
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
 FAKE = os.getenv("WHATSAPP_FAKE_MODE", "true").lower() == "true"
@@ -56,8 +56,23 @@ async def process_message(msg_id: str, fields: dict):
         if msg_type == 'media' and media_obj:
             result['media_kind'] = media_obj.get('kind')
     else:
-        url = f"https://graph.facebook.com/v20.0/{PHONE_ID}/messages"
-        headers = {"Authorization": f"Bearer {TOKEN}"}
+        # Resolve tenant-specific credentials from Channel when available (fallback to env)
+        phone_id = PHONE_ID
+        token = TOKEN
+        try:
+            with SessionLocal() as db:
+                ch = db.get(DBChannel, fields.get("channel_id"))
+                if ch and getattr(ch, "credentials", None):
+                    creds = ch.credentials or {}
+                    try:
+                        phone_id = creds.get("phone_number_id") or phone_id
+                        token = creds.get("access_token") or token
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
+        headers = {"Authorization": f"Bearer {token}"}
         payload = {"messaging_product": "whatsapp", "to": to}
         if msg_type == "template" and tpl_obj:
             payload["type"] = "template"

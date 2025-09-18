@@ -176,11 +176,24 @@ async def receive(req: Request):
 						conv = Conversation(id=str(uuid.uuid4()), org_id=str(org_id), contact_id=ct.id, channel_id=str(channel_id), state='open', assignee=None)
 						db.add(conv)
 						db.commit()
-					# persist inbound message
+		# persist inbound message
 					import uuid
 					msg = Message(id=str(uuid.uuid4()), conversation_id=conv.id, direction='in', type='text', content={"text": text_body} if text_body else None, template_id=None, status=None, meta=None, client_id=None)
 					db.add(msg)
 					db.commit()
+					# Publish outgoing webhook event for inbound message (best-effort)
+					try:
+						payload = {
+							"conversation_id": conv.id,
+							"message_id": msg.id,
+							"type": msg.type,
+							"direction": msg.direction,
+							"content": msg.content,
+							"channel_id": conv.channel_id,
+						}
+						redis.xadd("nf:webhooks", {"org_id": str(org_id), "type": "message.received", "body": json.dumps(payload), "event_id": str(uuid.uuid4()), "ts": str(int(__import__('time').time()*1000))})
+					except Exception:
+						pass
 	except Exception:
 		logger.exception("inbound persistence failed")
 	try:

@@ -12,6 +12,10 @@ import {
   getConversation,
   updateConversation,
   type Conversation,
+  listNotes,
+  createNote,
+  deleteNote,
+  type Note,
 } from "../../lib/api";
 import { getAccessToken } from "../../lib/auth";
 
@@ -24,6 +28,8 @@ export default function ConversationDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [convMeta, setConvMeta] = useState<Conversation | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [attachments, setAttachments] = useState<import("../../lib/api").Attachment[]>([]);
   const [text, setText] = useState("");
   const [msgType, setMsgType] = useState<"text" | "template" | "media">("text");
   const [tplName, setTplName] = useState("");
@@ -50,6 +56,10 @@ export default function ConversationDetailPage() {
       setConvMeta(meta);
       const data = await listMessages(token, convId, { limit: 50 });
       setMsgs(data);
+      const ns = await listNotes(token, convId);
+      setNotes(ns);
+      const atts = await (await import("../../lib/api")).listAttachments(token, convId);
+      setAttachments(atts);
     } catch (e: any) {
       setError(e?.message || "Error cargando mensajes");
     } finally {
@@ -125,6 +135,12 @@ export default function ConversationDetailPage() {
   const [savingConv, setSavingConv] = useState(false);
   const [nextState, setNextState] = useState<string>("open");
   const [nextAssignee, setNextAssignee] = useState<string>("");
+  const [noteText, setNoteText] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [attUrl, setAttUrl] = useState("");
+  const [attName, setAttName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [savingAtt, setSavingAtt] = useState(false);
 
   useEffect(() => {
     if (!convMeta) return;
@@ -146,6 +162,64 @@ export default function ConversationDetailPage() {
     } finally {
       setSavingConv(false);
     }
+  };
+
+  const onAddNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !convId) return;
+    if (!noteText.trim()) return;
+    setSavingNote(true);
+    setError(null);
+    try {
+      await createNote(token, convId, { body: noteText.trim() });
+      setNoteText("");
+      const ns = await listNotes(token, convId);
+      setNotes(ns);
+      setToast({ msg: "Nota añadida", type: "success" });
+    } catch (e: any) {
+      setError(e?.message || "Error añadiendo nota");
+      setToast({ msg: "Error añadiendo nota", type: "error" });
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const onDeleteNote = async (id: string) => {
+    if (!token || !convId) return;
+    try {
+      await deleteNote(token, convId, id);
+      setNotes(await listNotes(token, convId));
+    } catch {}
+  };
+
+  const onAddAttachment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !convId) return;
+    if (!attUrl.trim()) return;
+    setSavingAtt(true);
+    setError(null);
+    try {
+      const { createAttachment, listAttachments } = await import("../../lib/api");
+      await createAttachment(token, convId, { url: attUrl.trim(), filename: attName.trim() || undefined });
+      setAttUrl("");
+      setAttName("");
+      setAttachments(await listAttachments(token, convId));
+      setToast({ msg: "Adjunto añadido", type: "success" });
+    } catch (e: any) {
+      setError(e?.message || "Error añadiendo adjunto");
+      setToast({ msg: "Error añadiendo adjunto", type: "error" });
+    } finally {
+      setSavingAtt(false);
+    }
+  };
+
+  const onDeleteAttachment = async (id: string) => {
+    if (!token || !convId) return;
+    try {
+      const { deleteAttachment, listAttachments } = await import("../../lib/api");
+      await deleteAttachment(token, convId, id);
+      setAttachments(await listAttachments(token, convId));
+    } catch {}
   };
 
   return (
@@ -210,6 +284,102 @@ export default function ConversationDetailPage() {
                 <button type="button" onClick={() => { setNextState("closed"); onSaveConv(); }} className="px-3 py-2 rounded border border-red-300 text-red-700 text-sm">Cerrar</button>
               )}
             </div>
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-slate-700">Notas internas</h2>
+            <form onSubmit={onAddNote} className="flex gap-2">
+              <input
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                placeholder="Escribe una nota solo visible para el equipo…"
+                className="flex-1 border border-slate-300 rounded px-3 py-2 text-sm"
+              />
+              <button type="submit" disabled={savingNote || !noteText.trim()} className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60 text-sm">
+                {savingNote ? "Guardando…" : "Añadir"}
+              </button>
+            </form>
+            {notes.length === 0 ? (
+              <p className="text-sm text-slate-500">Sin notas.</p>
+            ) : (
+              <ul className="space-y-1">
+                {notes.map((n) => (
+                  <li key={n.id} className="flex items-start justify-between gap-3 border border-slate-200 rounded p-2">
+                    <div className="text-sm">
+                      <div className="text-slate-800 whitespace-pre-wrap">{n.body}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {n.author || '—'} · {n.created_at ? new Date((n.created_at as number) * 1000).toLocaleString() : ''}
+                      </div>
+                    </div>
+                    <button onClick={() => onDeleteNote(n.id)} className="text-xs px-2 py-1 rounded border border-red-300 text-red-700">Borrar</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-slate-700">Adjuntos</h2>
+            <form onSubmit={onAddAttachment} className="grid md:grid-cols-5 gap-2 items-end">
+              <div className="md:col-span-3">
+                <label className="block text-xs text-slate-600">URL</label>
+                <input
+                  value={attUrl}
+                  onChange={(e) => setAttUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="border border-slate-300 rounded px-3 py-2 text-sm w-full"
+                />
+              </div>
+              <div className="md:col-span-1">
+                <label className="block text-xs text-slate-600">Nombre (opcional)</label>
+                <input
+                  value={attName}
+                  onChange={(e) => setAttName(e.target.value)}
+                  placeholder="archivo.pdf"
+                  className="border border-slate-300 rounded px-3 py-2 text-sm w-full"
+                />
+              </div>
+              <button type="submit" disabled={savingAtt || !attUrl.trim()} className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60 text-sm">
+                {savingAtt ? "Guardando…" : "Añadir"}
+              </button>
+            </form>
+            <div className="flex items-center gap-2">
+              <input ref={fileInputRef} type="file" className="text-sm" onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file || !token || !convId) return;
+                setSavingAtt(true);
+                try {
+                  const { signUpload, createAttachment, listAttachments } = await import("../../lib/api");
+                  const s = await signUpload(token, { filename: file.name, content_type: (file as any).type || undefined });
+                  await fetch(s.url, { method: s.method || 'PUT', headers: { 'Content-Type': (file as any).type || 'application/octet-stream' }, body: file });
+                  await createAttachment(token, convId, { storage_key: s.key, filename: file.name });
+                  setAttachments(await listAttachments(token, convId));
+                  setToast({ msg: "Archivo subido", type: "success" });
+                } catch (err: any) {
+                  setToast({ msg: err?.message || 'Error subiendo archivo', type: 'error' });
+                } finally {
+                  setSavingAtt(false);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }
+              }} />
+            </div>
+            {attachments.length === 0 ? (
+              <p className="text-sm text-slate-500">Sin adjuntos.</p>
+            ) : (
+              <ul className="space-y-1">
+                {attachments.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded p-2 text-sm">
+                    <div className="truncate">
+                      <a href={a.url} target="_blank" rel="noreferrer" className="text-blue-700 underline break-all">
+                        {a.filename || a.url}
+                      </a>
+                      <span className="ml-2 text-xs text-slate-500">{a.uploaded_by || ''}</span>
+                    </div>
+                    <button onClick={() => onDeleteAttachment(a.id)} className="text-xs px-2 py-1 rounded border border-red-300 text-red-700">Borrar</button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           <form onSubmit={onSend} className="space-y-2">

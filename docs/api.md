@@ -41,6 +41,7 @@ curl -X POST http://$HOST/api/auth/logout \
 - `POST /api/messages/send` — encolar un mensaje (text/template/media).
 - `GET /api/inbox/stream` — SSE para recibir eventos de inbox.
 - `GET /internal/status` — health/status interno (servicios).
+ - `GET /api/analytics/kpis` — KPIs (servicio Analytics, vía rewrite).
 
 ## Conversations/Messages (MVP)
 
@@ -279,3 +280,49 @@ Si se repite la misma clave para el mismo tenant y ruta, el Gateway devuelve 200
 - `GET /internal/status` muestra métricas simples:
   - `rate_limit.limited`: cantidad de peticiones limitadas
   - `idempotency.reuse`: cantidad de reusos de idempotencia
+
+## Webhooks salientes (MVP)
+
+Configura endpoints por organización (sólo admin). Se almacenan en Redis para MVP.
+
+Listar endpoints:
+
+```http
+GET /api/integrations/webhooks
+Authorization: Bearer <JWT (admin)>
+```
+
+Crear endpoint:
+
+```http
+POST /api/integrations/webhooks
+Authorization: Bearer <JWT (admin)>
+Content-Type: application/json
+{
+  "url": "https://acme.example.com/hooks/nexia",
+  "secret": "<opcional>",
+  "events": ["message.sent","message.received","conversation.updated"],
+  "status": "active"
+}
+```
+
+Borrar endpoint:
+
+```http
+DELETE /api/integrations/webhooks/{id}
+Authorization: Bearer <JWT (admin)>
+```
+
+Entrega de eventos (worker `webhook-dispatcher`):
+- Stream Redis: `nf:webhooks` → POST a cada endpoint activo del tenant.
+- Cabeceras: `Content-Type: application/json`, `X-NexIA-Signature-256: sha256=…` (si `secret` configurado).
+- Body:
+
+```json
+{
+  "type": "message.sent", // o message.received, conversation.updated
+  "data": { … evento … },
+  "org_id": "org_123",
+  "ts": 1712345678901
+}
+```

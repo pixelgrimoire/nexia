@@ -19,6 +19,9 @@ from packages.common.models import (
     RefreshToken,
     Template as DBTemplate,
     Flow as DBFlow,
+    Note,
+    Attachment,
+    AuditLog,
 )
 import bcrypt
 from collections import defaultdict
@@ -63,6 +66,13 @@ except Exception:
 
 # Internal URL for Messaging Gateway (used for channel verification)
 MGW_INTERNAL_URL = os.getenv("MGW_INTERNAL_URL", "http://messaging-gateway:8000")
+
+# MinIO/S3 config (optional)
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minio")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio12345")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "nexia-uploads")
 
 # simple in-process fixed-window rate limiter: key -> {window_ts: count}
 _rate_counters: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
@@ -119,6 +129,19 @@ def _enforce_rate_limit(key: str):
     if bucket[now_min] > RATE_LIMIT_PER_MIN:
         _inc_rl_limited()
         raise HTTPException(status_code=429, detail="rate-limit-exceeded")
+
+
+def _sanitize_credentials(creds: dict | None) -> dict | None:
+    try:
+        if not isinstance(creds, dict):
+            return None
+        c = dict(creds)
+        # Never expose access_token in API responses
+        if 'access_token' in c:
+            c.pop('access_token', None)
+        return c
+    except Exception:
+        return None
 
 
 def _get_idempotent_cached(key: Optional[str]) -> Optional[dict]:
@@ -192,6 +215,93 @@ def _fetch_mgw_status() -> Optional[dict]:
         return None
     except Exception:
         return None
+
+def _fetch_mgw_metrics() -> dict:
+    """Fetch Messaging Gateway internal metrics (JSON) with safe fallbacks."""
+    out = {"streams": {"nf_outbox": None, "nf_sent": None}}
+    try:
+        u = urlparse(MGW_INTERNAL_URL)
+        host = u.hostname or "messaging-gateway"
+        port = u.port or (443 if (u.scheme or "http") == "https" else 80)
+        path = "/internal/metrics"
+        conn = http.client.HTTPSConnection(host, port, timeout=3) if (u.scheme or "http") == "https" else http.client.HTTPConnection(host, port, timeout=3)
+        conn.request("GET", path, headers={"Host": u.hostname or host})
+        resp = conn.getresponse()
+        if 200 <= resp.status < 300:
+            body = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(body)
+                if isinstance(data, dict):
+                    out = data
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # fill fallbacks from Redis if missing
+    try:
+        if out.get("streams", {}).get("nf_outbox") is None:
+            out.setdefault("streams", {})["nf_outbox"] = redis.xlen("nf:outbox")
+    except Exception:
+        pass
+    try:
+        if out.get("streams", {}).get("nf_sent") is None:
+            out.setdefault("streams", {})["nf_sent"] = redis.xlen("nf:sent")
+    except Exception:
+        pass
+    return out
+
+
+def _minio_client():
+    try:
+        from minio import Minio  # type: ignore
+    except Exception:
+        return None
+    host = MINIO_ENDPOINT
+    secure = MINIO_SECURE
+    if host.startswith("http://"):
+        host = host[len("http://"):]
+        secure = False
+    if host.startswith("https://"):
+        host = host[len("https://"):]
+        secure = True
+    try:
+        client = Minio(host, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=secure)
+        try:
+            if not client.bucket_exists(MINIO_BUCKET):
+                client.make_bucket(MINIO_BUCKET)
+        except Exception:
+            pass
+        return client
+    except Exception:
+        return None
+
+def _verify_wa_cloud_phone_id(pnid: Optional[str], access_token: Optional[str]) -> tuple[bool, str | None, Optional[str]]:
+    """Best-effort verification against Graph API for WA Cloud credentials.
+
+    Returns (ok, status, phone_id_returned)
+    """
+    try:
+        if not pnid or not access_token:
+            return (False, "missing-credentials", None)
+        host = "graph.facebook.com"
+        path = f"/v20.0/{pnid}?fields=id"
+        conn = http.client.HTTPSConnection(host, 443, timeout=4)
+        conn.request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        if 200 <= resp.status < 300:
+            try:
+                data = json.loads(body)
+                got = str(data.get("id")) if isinstance(data, dict) else None
+                if got == str(pnid):
+                    return (True, "ok", got)
+                return (False, "mismatch", got)
+            except Exception:
+                return (False, "invalid-json", None)
+        # 401/403 usually means invalid token or scope
+        return (False, f"http-{resp.status}", None)
+    except Exception:
+        return (False, "network-error", None)
 
 class SendMessage(BaseModel):
     channel_id: str
@@ -713,6 +823,24 @@ def update_conversation(conv_id: str, body: ConversationUpdate, user: dict = req
         conv.assignee = body.assignee
     db.commit()
     db.refresh(conv)
+    try:
+        _audit(db, user, "conversation.updated", "conversation", conv.id, {"state": conv.state, "assignee": conv.assignee})
+    except Exception:
+        pass
+    # Emit webhook event (best-effort)
+    try:
+        _publish_webhook_event(
+            org_id=str(user.get("org_id")),
+            event_type="conversation.updated",
+            payload={
+                "conversation_id": conv.id,
+                "channel_id": conv.channel_id,
+                "state": conv.state,
+                "assignee": conv.assignee,
+            },
+        )
+    except Exception:
+        pass
     return ConversationOut(id=conv.id, org_id=conv.org_id, contact_id=conv.contact_id, channel_id=conv.channel_id, state=conv.state, assignee=conv.assignee)
 
 
@@ -725,6 +853,23 @@ class MessageOut(BaseModel):
     client_id: str | None = None
     status: str | None = None
     meta: dict | None = None
+
+
+class NoteOut(BaseModel):
+    id: str
+    conversation_id: str
+    author: str | None = None
+    body: str
+    created_at: float | None = None
+
+
+class AttachmentOut(BaseModel):
+    id: str
+    conversation_id: str
+    url: str
+    filename: str | None = None
+    uploaded_by: str | None = None
+    created_at: float | None = None
 
 
 @app.get("/api/conversations/{conv_id}/messages", response_model=list[MessageOut])
@@ -769,6 +914,37 @@ def list_messages(conv_id: str, limit: int = 100, offset: int = 0, after_id: str
             )
         )
     return out
+
+
+# ----------------------------------------------------------------------------
+# Audit helper
+
+def _audit(db: Session, user: dict, action: str, entity_type: str, entity_id: str | None, data: dict | None = None):
+    try:
+        # ensure table exists (best-effort in dev)
+        AuditLog.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
+    try:
+        from datetime import datetime
+        row = AuditLog(
+            id=str(uuid4()),
+            org_id=str(user.get("org_id")),
+            actor=str(user.get("email") or user.get("sub") or "user"),
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id) if entity_id else None,
+            data=data if isinstance(data, dict) else None,
+            created_at=datetime.utcnow(),
+        )
+        db.add(row)
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 
 @app.post("/api/conversations/{conv_id}/messages", response_model=MessageOut)
@@ -900,7 +1076,446 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
         status=getattr(m, "status", None),
         meta=getattr(m, "meta", None),
     )
+    try:
+        _audit(db, user, "message.sent", "message", m.id, {"conversation_id": conv.id, "type": m.type, "client_id": m.client_id})
+    except Exception:
+        pass
+    # Emit webhook event (best-effort)
+    try:
+        _publish_webhook_event(
+            org_id=str(user.get("org_id")),
+            event_type="message.sent",
+            payload={
+                "conversation_id": conv.id,
+                "message_id": m.id,
+                "type": m.type,
+                "direction": m.direction,
+                "content": m.content,
+                "client_id": m.client_id,
+                "channel_id": conv.channel_id,
+            },
+        )
+    except Exception:
+        pass
     _set_idempotent_cached(idem_key, out.dict() if hasattr(out, 'dict') else out.model_dump())
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Conversation Notes (internal)
+
+class NoteCreate(BaseModel):
+    body: str
+
+
+@app.get("/api/conversations/{conv_id}/notes", response_model=list[NoteOut])
+def list_notes(conv_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    # Ensure table exists (best-effort in dev)
+    try:
+        Note.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
+    try:
+        rows = db.query(Note).filter(Note.conversation_id == conv_id).order_by(getattr(Note, 'created_at', Note.id).desc()).all()
+    except Exception:
+        rows = []
+    out: list[NoteOut] = []
+    for n in rows:
+        ts = None
+        try:
+            import datetime
+            ts = n.created_at.timestamp() if getattr(n, 'created_at', None) else None
+        except Exception:
+            ts = None
+        out.append(NoteOut(id=n.id, conversation_id=n.conversation_id, author=getattr(n, 'author', None), body=n.body or "", created_at=ts))
+    return out
+
+
+@app.post("/api/conversations/{conv_id}/notes", response_model=NoteOut)
+def create_note(conv_id: str, body: NoteCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if not body.body or not body.body.strip():
+        raise HTTPException(status_code=400, detail="body-required")
+    # Ensure table exists (best-effort in dev)
+    try:
+        Note.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
+    nid = str(uuid4())
+    author = str(user.get("email") or user.get("sub") or "user")
+    try:
+        from datetime import datetime
+        note = Note(id=nid, conversation_id=conv_id, author=author, body=body.body.strip(), created_at=datetime.utcnow())
+        db.add(note)
+        db.commit()
+    except Exception:
+        raise HTTPException(status_code=503, detail="note-store-failed")
+    try:
+        _audit(db, user, "note.created", "note", nid, {"conversation_id": conv_id})
+    except Exception:
+        pass
+    return NoteOut(id=nid, conversation_id=conv_id, author=author, body=body.body.strip(), created_at=time.time())
+
+
+@app.delete("/api/conversations/{conv_id}/notes/{note_id}")
+def delete_note(conv_id: str, note_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    try:
+        n = db.get(Note, note_id)
+        if not n or n.conversation_id != conv_id:
+            raise HTTPException(status_code=404, detail="note not found")
+        db.delete(n)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=503, detail="note-delete-failed")
+    try:
+        _audit(db, user, "note.deleted", "note", note_id, {"conversation_id": conv_id})
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
+# Webhook observability + test
+
+class WebhookEventOut(BaseModel):
+    id: str
+    org_id: str
+    wid: str | None = None
+    type: str | None = None
+    url: str | None = None
+    ts: int | None = None
+
+
+@app.get("/api/integrations/webhooks/events", response_model=list[WebhookEventOut])
+def webhooks_events(kind: str = "delivered", limit: int = 50, user: dict = require_roles(Role.admin)):
+    stream = "wh:delivered" if kind == "delivered" else "nf:webhooks:dlq"
+    try:
+        raw = redis.xrevrange(stream, count=min(max(limit, 1), 200))
+    except Exception:
+        raw = []
+    out: list[WebhookEventOut] = []
+    for item in raw:
+        try:
+            _id, kv = item
+        except Exception:
+            continue
+        if isinstance(kv, dict):
+            m = {str(k): str(v) for k, v in kv.items()}
+        else:
+            # list-like alternating kv
+            m = {}
+            try:
+                for i in range(0, len(kv), 2):
+                    m[str(kv[i])] = str(kv[i+1])
+            except Exception:
+                m = {}
+        if m.get("org_id") != str(user.get("org_id")):
+            continue
+        try:
+            ts = int(m.get("ts") or 0)
+        except Exception:
+            ts = 0
+        out.append(WebhookEventOut(id=str(_id.decode() if hasattr(_id, 'decode') else _id), org_id=str(m.get("org_id")), wid=m.get("wid"), type=m.get("type"), url=m.get("url"), ts=ts))
+    return out
+
+
+class WebhookTestIn(BaseModel):
+    event_type: str | None = None
+    payload: dict | None = None
+
+
+@app.post("/api/integrations/webhooks/test")
+def webhooks_test(body: WebhookTestIn, user: dict = require_roles(Role.admin)):
+    evt = {
+        "org_id": str(user.get("org_id")),
+        "type": str(body.event_type or "webhook.test"),
+        "event_id": str(uuid4()),
+        "ts": str(int(time.time()*1000)),
+        "body": json.dumps(body.payload or {"hello": "world"}),
+    }
+    try:
+        redis.xadd("nf:webhooks", evt)
+    except Exception:
+        raise HTTPException(status_code=503, detail="webhook-test-enqueue-failed")
+    return {"ok": True}
+
+
+class WebhookRetryIn(BaseModel):
+    id: str
+
+
+@app.post("/api/integrations/webhooks/retry")
+def webhooks_retry(body: WebhookRetryIn, user: dict = require_roles(Role.admin)):
+    dlq = "nf:webhooks:dlq"
+    try:
+        rows = redis.xrange(dlq, min=body.id, max=body.id)
+    except Exception:
+        rows = []
+    if not rows:
+        raise HTTPException(status_code=404, detail="dlq-item-not-found")
+    row = rows[0]
+    _id, kv = row
+    # normalize kv to dict[str,str]
+    if isinstance(kv, dict):
+        m = {str(k): str(v) for k, v in kv.items()}
+    else:
+        m = {}
+        try:
+            for i in range(0, len(kv), 2):
+                m[str(kv[i])] = str(kv[i+1])
+        except Exception:
+            m = {}
+    if m.get("org_id") != str(user.get("org_id")):
+        raise HTTPException(status_code=403, detail="forbidden")
+    # requeue to nf:webhooks
+    try:
+        evt = {
+            "org_id": m.get("org_id") or "",
+            "type": m.get("type") or "event",
+            "event_id": str(uuid4()),
+            "ts": str(int(time.time()*1000)),
+            "body": m.get("body") or "{}",
+        }
+        redis.xadd("nf:webhooks", evt)
+        try:
+            # best-effort delete from DLQ
+            redis.xdel(dlq, _id)
+        except Exception:
+            pass
+    except Exception:
+        raise HTTPException(status_code=503, detail="webhook-retry-failed")
+    return {"ok": True}
+
+
+@app.get("/api/integrations/metrics")
+def integrations_metrics(user: dict = require_roles(Role.admin)):
+    """Aggregate simple metrics for integrations and messaging components."""
+    mgw_int = _fetch_mgw_metrics()
+    wh_delivered = None
+    wh_dlq = None
+    incoming = None
+    scheduled = None
+    try:
+        wh_delivered = redis.xlen("wh:delivered")
+    except Exception:
+        pass
+    try:
+        wh_dlq = redis.xlen("nf:webhooks:dlq")
+    except Exception:
+        pass
+    try:
+        incoming = redis.xlen("nf:incoming")
+    except Exception:
+        pass
+    try:
+        scheduled = redis.zcard(os.getenv("FLOW_ENGINE_SCHED_ZSET", "nf:incoming:scheduled"))
+    except Exception:
+        pass
+    return {
+        "messaging_gateway": mgw_int,
+        "webhooks": {"delivered": wh_delivered, "dlq": wh_dlq},
+        "engine": {"incoming": incoming, "scheduled": scheduled},
+    }
+
+
+# ----------------------------------------------------------------------------
+# Attachments (by URL, MVP)
+
+class AttachmentCreate(BaseModel):
+    url: str | None = None
+    filename: str | None = None
+    storage_key: str | None = None
+
+
+@app.get("/api/conversations/{conv_id}/attachments", response_model=list[AttachmentOut])
+def list_attachments(conv_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    try:
+        Attachment.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
+    try:
+        rows = db.query(Attachment).filter(Attachment.conversation_id == conv_id).order_by(getattr(Attachment, 'created_at', Attachment.id).desc()).all()
+    except Exception:
+        rows = []
+    out: list[AttachmentOut] = []
+    for a in rows:
+        ts = None
+        # If object stored via storage_key, generate presigned GET URL
+        url = a.url or None
+        try:
+            if not url and getattr(a, 'storage_key', None):
+                client = _minio_client()
+                if client is not None:
+                    url = client.presigned_get_object(MINIO_BUCKET, a.storage_key, expires=timedelta(minutes=10))
+        except Exception:
+            pass
+        try:
+            ts = a.created_at.timestamp() if getattr(a, 'created_at', None) else None
+        except Exception:
+            ts = None
+        out.append(AttachmentOut(id=a.id, conversation_id=a.conversation_id, url=url or "", filename=getattr(a, 'filename', None), uploaded_by=getattr(a, 'uploaded_by', None), created_at=ts))
+    return out
+
+
+@app.post("/api/conversations/{conv_id}/attachments", response_model=AttachmentOut)
+def create_attachment(conv_id: str, body: AttachmentCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if (not body.url or not str(body.url).strip()) and (not body.storage_key or not str(body.storage_key).strip()):
+        raise HTTPException(status_code=400, detail="url-or-storage_key-required")
+    try:
+        Attachment.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
+    aid = str(uuid4())
+    uploader = str(user.get("email") or user.get("sub") or "user")
+    try:
+        from datetime import datetime
+        row = Attachment(id=aid, conversation_id=conv_id, url=(str(body.url).strip() if body.url else None), filename=(body.filename or None), uploaded_by=uploader, created_at=datetime.utcnow(), storage_key=(str(body.storage_key).strip() if body.storage_key else None))
+        db.add(row)
+        db.commit()
+    except Exception:
+        raise HTTPException(status_code=503, detail="attachment-store-failed")
+    try:
+        _audit(db, user, "attachment.created", "attachment", aid, {"conversation_id": conv_id, "filename": body.filename, "storage_key": body.storage_key, "url": body.url})
+    except Exception:
+        pass
+    # if storage_key, try to return presigned get url for convenience
+    url_out = body.url
+    try:
+        if not url_out and body.storage_key:
+            client = _minio_client()
+            if client is not None:
+                url_out = client.presigned_get_object(MINIO_BUCKET, body.storage_key, expires=timedelta(minutes=10))
+    except Exception:
+        pass
+    return AttachmentOut(id=aid, conversation_id=conv_id, url=(url_out or ""), filename=(body.filename or None), uploaded_by=uploader, created_at=time.time())
+
+
+@app.delete("/api/conversations/{conv_id}/attachments/{att_id}")
+def delete_attachment(conv_id: str, att_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+    conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    try:
+        a = db.get(Attachment, att_id)
+        if not a or a.conversation_id != conv_id:
+            raise HTTPException(status_code=404, detail="attachment not found")
+        db.delete(a)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=503, detail="attachment-delete-failed")
+    try:
+        _audit(db, user, "attachment.deleted", "attachment", att_id, {"conversation_id": conv_id})
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# Presigned upload/download (MinIO/S3)
+class UploadSignIn(BaseModel):
+    filename: str
+    content_type: str | None = None
+
+
+class UploadSignOut(BaseModel):
+    key: str
+    url: str
+    method: str = "PUT"
+
+
+@app.post("/api/uploads/sign", response_model=UploadSignOut)
+def sign_upload(body: UploadSignIn, user: dict = require_roles(Role.admin, Role.agent)):
+    client = _minio_client()
+    if client is None:
+        raise HTTPException(status_code=501, detail="uploads-not-configured")
+    # object key namespaced by org
+    key = f"org={user.get('org_id')}/attachments/{int(time.time())}_{uuid4()}_{body.filename}"
+    try:
+        url = client.presigned_put_object(MINIO_BUCKET, key, expires=timedelta(minutes=10))
+    except Exception:
+        raise HTTPException(status_code=503, detail="sign-failed")
+    return UploadSignOut(key=key, url=url)
+
+
+# ----------------------------------------------------------------------------
+# Audit (MVP)
+
+class AuditLogOut(BaseModel):
+    id: str
+    org_id: str
+    actor: str | None = None
+    action: str
+    entity_type: str | None = None
+    entity_id: str | None = None
+    data: dict | None = None
+    created_at: float | None = None
+
+
+@app.get("/api/audit", response_model=list[AuditLogOut])
+def list_audit(
+    limit: int = 100,
+    action: str | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    user: dict = require_roles(Role.admin),
+    db: Session = Depends(lambda: SessionLocal()),
+):
+    # ensure table exists in dev
+    try:
+        AuditLog.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
+    try:
+        q = db.query(AuditLog).filter(getattr(AuditLog, 'org_id') == str(user.get('org_id')))
+        if action:
+            q = q.filter(getattr(AuditLog, 'action') == action)
+        if entity_type:
+            q = q.filter(getattr(AuditLog, 'entity_type') == entity_type)
+        if entity_id:
+            q = q.filter(getattr(AuditLog, 'entity_id') == entity_id)
+        # order by created_at desc when available
+        order_col = getattr(AuditLog, 'created_at', None)
+        if order_col is not None:
+            q = q.order_by(order_col.desc())
+        rows = q.limit(min(max(limit, 1), 500)).all()
+    except Exception:
+        rows = []
+    out: list[AuditLogOut] = []
+    for r in rows:
+        ts = None
+        try:
+            ts = r.created_at.timestamp() if getattr(r, 'created_at', None) else None
+        except Exception:
+            ts = None
+        out.append(
+            AuditLogOut(
+                id=r.id,
+                org_id=r.org_id,
+                actor=getattr(r, 'actor', None),
+                action=r.action,
+                entity_type=getattr(r, 'entity_type', None),
+                entity_id=getattr(r, 'entity_id', None),
+                data=getattr(r, 'data', None),
+                created_at=ts,
+            )
+        )
     return out
 
 
@@ -954,7 +1569,104 @@ def mark_messages_read(conv_id: str, body: MarkReadBody, user: dict = require_ro
             updated += 1
     if updated:
         db.commit()
+    try:
+        _audit(db, user, "conversation.messages.read", "conversation", conv_id, {"updated": int(updated), "up_to_id": body.up_to_id})
+    except Exception:
+        pass
     return {"updated": updated}
+
+# ----------------------------------------------------------------------------
+# Outgoing Webhooks (MVP)
+
+class WebhookCreate(BaseModel):
+    url: str
+    secret: str | None = None
+    events: list[str] | None = None  # e.g., ["message.sent","message.received","conversation.updated"]
+    status: str | None = "active"
+
+
+class WebhookOut(BaseModel):
+    id: str
+    url: str
+    status: str | None = None
+    events: list[str] | None = None
+    created_at: float | None = None
+
+
+def _wh_key(org_id: str) -> str:
+    return f"wh:endpoints:{org_id}"
+
+
+def _publish_webhook_event(org_id: str, event_type: str, payload: dict) -> None:
+    try:
+        evt = {
+            "org_id": str(org_id),
+            "type": str(event_type),
+            "event_id": str(uuid4()),
+            "ts": str(int(time.time() * 1000)),
+            "body": json.dumps(payload),
+        }
+        redis.xadd("nf:webhooks", evt)
+    except Exception:
+        # best-effort; no crash on dev
+        pass
+
+
+@app.get("/api/integrations/webhooks", response_model=list[WebhookOut])
+def webhooks_list(user: dict = require_roles(Role.admin),):
+    org = str(user.get("org_id"))
+    try:
+        items = redis.hgetall(_wh_key(org)) or {}
+    except Exception:
+        items = {}
+    out: list[WebhookOut] = []
+    for wid, raw in items.items():
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            obj = {"url": raw}
+        out.append(WebhookOut(id=wid, url=str(obj.get("url")), status=obj.get("status"), events=obj.get("events"), created_at=obj.get("created_at")))
+    return out
+
+
+@app.post("/api/integrations/webhooks", response_model=WebhookOut)
+def webhooks_create(body: WebhookCreate, user: dict = require_roles(Role.admin)):
+    org = str(user.get("org_id"))
+    wid = str(uuid4())
+    obj = {
+        "id": wid,
+        "url": body.url,
+        "secret": body.secret or "",
+        "events": body.events or ["message.sent", "message.received", "conversation.updated"],
+        "status": body.status or "active",
+        "created_at": time.time(),
+    }
+    try:
+        redis.hset(_wh_key(org), wid, json.dumps(obj))
+    except Exception:
+        raise HTTPException(status_code=503, detail="webhook-store-unavailable")
+    try:
+        # best-effort audit persist (use contacts DB if available)
+        with SessionLocal() as db:
+            _audit(db, user, "webhook.created", "webhook", wid, {"url": body.url, "events": obj["events"], "status": obj["status"]})
+    except Exception:
+        pass
+    return WebhookOut(id=wid, url=obj["url"], status=obj["status"], events=obj["events"], created_at=obj["created_at"])
+
+
+@app.delete("/api/integrations/webhooks/{wid}")
+def webhooks_delete(wid: str, user: dict = require_roles(Role.admin)):
+    org = str(user.get("org_id"))
+    try:
+        redis.hdel(_wh_key(org), wid)
+    except Exception:
+        pass
+    try:
+        with SessionLocal() as db:
+            _audit(db, user, "webhook.deleted", "webhook", wid, None)
+    except Exception:
+        pass
+    return {"ok": True}
 # ----------------------------------------------------------------------------
 # Channels (tenancy + uniqueness)
 
@@ -1021,13 +1733,17 @@ def create_channel(body: ChannelCreate, user: dict = require_roles(Role.admin), 
     )
     db.add(ch)
     db.commit()
-    return ChannelOut(id=ch.id, org_id=ch.org_id, type=ch.type, mode=ch.mode, status=ch.status, phone_number=ch.phone_number, credentials=ch.credentials)
+    try:
+        _audit(db, user, "channel.created", "channel", ch.id, {"type": ch.type, "mode": ch.mode, "phone_number": ch.phone_number})
+    except Exception:
+        pass
+    return ChannelOut(id=ch.id, org_id=ch.org_id, type=ch.type, mode=ch.mode, status=ch.status, phone_number=ch.phone_number, credentials=_sanitize_credentials(ch.credentials))
 
 
 @app.get("/api/channels", response_model=list[ChannelOut])
 def list_channels(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
     rows = db.query(Channel).filter(Channel.org_id == user.get("org_id")).all()
-    return [ChannelOut(id=r.id, org_id=r.org_id, type=r.type, mode=r.mode, status=r.status, phone_number=r.phone_number, credentials=r.credentials) for r in rows]
+    return [ChannelOut(id=r.id, org_id=r.org_id, type=r.type, mode=r.mode, status=r.status, phone_number=r.phone_number, credentials=_sanitize_credentials(r.credentials)) for r in rows]
 
 
 def _load_channel_for_org(db: Session, ch_id: str, org_id: str) -> Channel | None:
@@ -1046,7 +1762,7 @@ def get_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent), 
     ch = _load_channel_for_org(db, ch_id, user.get("org_id"))
     if not ch:
         raise HTTPException(status_code=404, detail="channel not found")
-    return ChannelOut(id=ch.id, org_id=ch.org_id, type=ch.type, mode=ch.mode, status=ch.status, phone_number=ch.phone_number, credentials=ch.credentials)
+    return ChannelOut(id=ch.id, org_id=ch.org_id, type=ch.type, mode=ch.mode, status=ch.status, phone_number=ch.phone_number, credentials=_sanitize_credentials(ch.credentials))
 
 
 @app.put("/api/channels/{ch_id}", response_model=ChannelOut)
@@ -1067,10 +1783,26 @@ def update_channel(ch_id: str, body: ChannelUpdate, user: dict = require_roles(R
     if body.phone_number is not None:
         ch.phone_number = body.phone_number
     if body.credentials is not None:
-        ch.credentials = body.credentials
+        try:
+            current = ch.credentials or {}
+            if not isinstance(current, dict):
+                current = {}
+            for k, v in (body.credentials or {}).items():
+                if v is None:
+                    # allow clearing keys explicitly
+                    current.pop(k, None)
+                else:
+                    current[k] = v
+            ch.credentials = current
+        except Exception:
+            ch.credentials = body.credentials
     db.commit()
     db.refresh(ch)
-    return ChannelOut(id=ch.id, org_id=ch.org_id, type=ch.type, mode=ch.mode, status=ch.status, phone_number=ch.phone_number, credentials=ch.credentials)
+    try:
+        _audit(db, user, "channel.updated", "channel", ch.id, {"status": ch.status, "phone_number": ch.phone_number})
+    except Exception:
+        pass
+    return ChannelOut(id=ch.id, org_id=ch.org_id, type=ch.type, mode=ch.mode, status=ch.status, phone_number=ch.phone_number, credentials=_sanitize_credentials(ch.credentials))
 
 
 @app.delete("/api/channels/{ch_id}")
@@ -1080,6 +1812,10 @@ def delete_channel(ch_id: str, user: dict = require_roles(Role.admin), db: Sessi
         raise HTTPException(status_code=404, detail="channel not found")
     db.delete(ch)
     db.commit()
+    try:
+        _audit(db, user, "channel.deleted", "channel", ch_id, None)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -1098,25 +1834,41 @@ def verify_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent
     ch = _load_channel_for_org(db, ch_id, user.get("org_id"))
     if not ch:
         raise HTTPException(status_code=404, detail="channel not found")
-    pnid = _get_pnid(getattr(ch, "credentials", None))
+    creds = getattr(ch, "credentials", None) or {}
+    pnid = _get_pnid(creds)
+    access_token = None
+    try:
+        access_token = creds.get("access_token") if isinstance(creds, dict) else None
+    except Exception:
+        access_token = None
+
+    # Prefer direct verification against Graph if credentials are provided for this channel
+    ok = False
+    status = None
+    phone_id = None
+    if pnid and access_token:
+        ok, status, phone_id = _verify_wa_cloud_phone_id(pnid, access_token)
+        if ok:
+            return ChannelVerifyOut(ok=True, status="ok", fake=False, has_token=True, phone_id=phone_id or pnid, match=True, details=None)
+        # If direct check failed, fall back to MGW internal status as a softer signal
+
     st = _fetch_mgw_status()
     if st is None:
-        return ChannelVerifyOut(ok=False, status="warning", details="messaging-gateway unreachable")
+        return ChannelVerifyOut(ok=False, status="warning", details=(status or "messaging-gateway unreachable"))
     try:
         info = (((st or {}).get("workers", {}) or {}).get("send_worker", {}) or {})
         fake = bool(info.get("fake"))
-        has_token = bool(info.get("has_token"))
-        phone_id = info.get("phone_id")
-        match = (pnid is None) or (phone_id == pnid)
-        # ok in FAKE mode too, but mark it in status/details
-        ok = match and (has_token or fake)
-        status = "ok" if ok else "warning"
-        details = None if ok else ("phone_id mismatch" if pnid and phone_id and phone_id != pnid else "missing token or phone_id")
-        if ok and fake:
+        has_token = bool(info.get("has_token")) or bool(access_token)
+        mgw_phone_id = info.get("phone_id")
+        match = (pnid is None) or (mgw_phone_id == pnid)
+        ok2 = match and (has_token or fake)
+        out_status = "ok" if ok2 else "warning"
+        details = None if ok2 else (status or ("phone_id mismatch" if pnid and mgw_phone_id and mgw_phone_id != pnid else "missing token or phone_id"))
+        if ok2 and fake:
             details = "fake-mode"
-        return ChannelVerifyOut(ok=ok, status=status, fake=fake, has_token=has_token, phone_id=phone_id, match=match, details=details)
+        return ChannelVerifyOut(ok=ok2, status=out_status, fake=fake, has_token=has_token, phone_id=mgw_phone_id or phone_id or pnid, match=match, details=details)
     except Exception:
-        return ChannelVerifyOut(ok=False, status="error", details="invalid mgw status format")
+        return ChannelVerifyOut(ok=False, status="error", details=status or "invalid mgw status format")
 
 
 # ----------------------------------------------------------------------------
@@ -1313,6 +2065,10 @@ def create_flow(body: FlowCreate, user: dict = require_roles(Role.admin), db: Se
     row = DBFlow(id=fid, org_id=user.get("org_id"), name=body.name, version=body.version or 1, graph=body.graph if isinstance(body.graph, dict) else None, status=body.status or "draft", created_by=str(user.get("sub")))
     db.add(row)
     db.commit()
+    try:
+        _audit(db, user, "flow.created", "flow", fid, {"name": body.name, "status": body.status or "draft"})
+    except Exception:
+        pass
     return FlowOut(id=row.id, org_id=row.org_id, name=row.name, version=row.version, graph=row.graph if isinstance(row.graph, dict) else None, status=row.status, created_by=row.created_by)
 
 
@@ -1353,6 +2109,10 @@ def update_flow(flow_id: str, body: FlowUpdate, user: dict = require_roles(Role.
         r.status = body.status
     db.commit()
     db.refresh(r)
+    try:
+        _audit(db, user, "flow.updated", "flow", flow_id, {"status": r.status, "version": r.version})
+    except Exception:
+        pass
     return FlowOut(id=r.id, org_id=r.org_id, name=r.name, version=r.version, graph=r.graph if isinstance(r.graph, dict) else None, status=r.status, created_by=r.created_by)
 
 
@@ -1363,6 +2123,10 @@ def delete_flow(flow_id: str, user: dict = require_roles(Role.admin), db: Sessio
         raise HTTPException(status_code=404, detail="flow not found")
     db.delete(r)
     db.commit()
+    try:
+        _audit(db, user, "flow.deleted", "flow", flow_id, None)
+    except Exception:
+        pass
     return {"ok": True}
 
 # ----------------------------------------------------------------------------

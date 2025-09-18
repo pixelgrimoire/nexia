@@ -251,6 +251,131 @@ export async function deleteFlow(token: JWT, id: string) {
   return apiFetch<{ ok: boolean }>(`/api/flows/${id}`, { method: "DELETE" }, token);
 }
 
+// --- Analytics ---
+export type KpiResponse = {
+  total_messages: number;
+  inbound_messages: number;
+  outbound_messages: number;
+  unique_conversations: number;
+  avg_first_response_seconds: number | null;
+  response_rate: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+};
+
+export async function getKpis(params?: { start_date?: string; end_date?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.start_date) qs.set("start_date", params.start_date);
+  if (params?.end_date) qs.set("end_date", params.end_date);
+  const q = qs.toString();
+  return apiFetch<KpiResponse>(`/api/analytics/kpis${q ? `?${q}` : ''}`);
+}
+
+export async function exportAnalytics(params?: { format?: 'csv' | 'json'; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.format) qs.set('format', params.format);
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  const url = `/api/analytics/export${qs.toString() ? `?${qs.toString()}` : ''}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  const blob = await res.blob();
+  const ctype = res.headers.get('content-type') || '';
+  return { blob, contentType: ctype };
+}
+
+// --- Outgoing Webhooks (MVP) ---
+export type OutWebhook = {
+  id: string;
+  url: string;
+  status?: string;
+  events?: string[];
+  created_at?: number;
+};
+
+export async function listOutgoingWebhooks(token: JWT) {
+  return apiFetch<OutWebhook[]>("/api/integrations/webhooks", {}, token);
+}
+
+export async function createOutgoingWebhook(
+  token: JWT,
+  body: { url: string; secret?: string; events?: string[]; status?: string }
+) {
+  return apiFetch<OutWebhook>("/api/integrations/webhooks", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteOutgoingWebhook(token: JWT, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/integrations/webhooks/${id}`, { method: "DELETE" }, token);
+}
+
+// --- Notes (internal) ---
+export type Note = {
+  id: string;
+  conversation_id: string;
+  author?: string | null;
+  body: string;
+  created_at?: number | null;
+};
+
+export async function listNotes(token: JWT, conversationId: string) {
+  return apiFetch<Note[]>(`/api/conversations/${conversationId}/notes`, {}, token);
+}
+
+export async function createNote(token: JWT, conversationId: string, body: { body: string }) {
+  return apiFetch<Note>(`/api/conversations/${conversationId}/notes`, { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteNote(token: JWT, conversationId: string, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/conversations/${conversationId}/notes/${id}`, { method: "DELETE" }, token);
+}
+
+// --- Attachments (URL-based) ---
+export type Attachment = {
+  id: string;
+  conversation_id: string;
+  url: string;
+  filename?: string | null;
+  uploaded_by?: string | null;
+  created_at?: number | null;
+};
+
+export async function listAttachments(token: JWT, conversationId: string) {
+  return apiFetch<Attachment[]>(`/api/conversations/${conversationId}/attachments`, {}, token);
+}
+
+export async function createAttachment(token: JWT, conversationId: string, body: { url?: string; filename?: string; storage_key?: string }) {
+  return apiFetch<Attachment>(`/api/conversations/${conversationId}/attachments`, { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function deleteAttachment(token: JWT, conversationId: string, id: string) {
+  return apiFetch<{ ok: boolean }>(`/api/conversations/${conversationId}/attachments/${id}`, { method: "DELETE" }, token);
+}
+
+export async function signUpload(token: JWT, body: { filename: string; content_type?: string }) {
+  return apiFetch<{ key: string; url: string; method: string }>(`/api/uploads/sign`, { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+// --- Audit ---
+export type AuditLog = {
+  id: string;
+  org_id: string;
+  actor?: string | null;
+  action: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  data?: Record<string, unknown> | null;
+  created_at?: number | null;
+};
+
+export async function listAudit(token: JWT, params?: { limit?: number; action?: string; entity_type?: string; entity_id?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  if (params?.action) qs.set('action', params.action);
+  if (params?.entity_type) qs.set('entity_type', params.entity_type);
+  if (params?.entity_id) qs.set('entity_id', params.entity_id);
+  const url = `/api/audit${qs.toString() ? `?${qs.toString()}` : ''}`;
+  return apiFetch<AuditLog[]>(url, {}, token);
+}
+
 // --- Contacts ---
 export type Contact = {
   id: string;

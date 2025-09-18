@@ -112,3 +112,35 @@ class FlowRun(Base):
     context = Column(JSONType)  # execution context/scratch
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
+
+
+class Note(Base):
+    __tablename__ = "notes"
+    id = Column(String, primary_key=True)
+    conversation_id = Column(ForeignKey("conversations.id"))
+    author = Column(String)  # user id or email
+    body = Column(Text)
+    created_at = Column(DateTime)
+
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+    id = Column(String, primary_key=True)
+    conversation_id = Column(ForeignKey("conversations.id"))
+    url = Column(Text)
+    filename = Column(String)
+    uploaded_by = Column(String)
+    created_at = Column(DateTime)
+    storage_key = Column(String)  # optional object key when stored in S3/MinIO
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(String, primary_key=True)
+    org_id = Column(ForeignKey("organizations.id"))
+    actor = Column(String)          # email or user id
+    action = Column(String)         # e.g., channel.created, flow.updated
+    entity_type = Column(String)    # channel|flow|template|conversation|message|note|attachment|webhook
+    entity_id = Column(String)      # id of the entity when applicable
+    data = Column(JSONType)         # small payload snapshot
+    created_at = Column(DateTime)

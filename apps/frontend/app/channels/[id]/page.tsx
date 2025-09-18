@@ -16,6 +16,7 @@ export default function ChannelEditPage() {
   // form
   const [phone, setPhone] = useState("");
   const [pnid, setPnid] = useState("");
+  const [waToken, setWaToken] = useState("");
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -52,10 +53,13 @@ export default function ChannelEditPage() {
     setSaving(true);
     setError(null);
     try {
+      const creds: any = {};
+      if (pnid.trim()) creds.phone_number_id = pnid.trim();
+      if (waToken.trim()) creds.access_token = waToken.trim();
       const updated = await updateChannel(token, id, {
         phone_number: phone.trim() || null as any,
         status,
-        credentials: pnid.trim() ? { phone_number_id: pnid.trim() } : {},
+        credentials: Object.keys(creds).length ? creds : undefined,
       });
       setChannel(updated);
       setToast({ msg: "Canal guardado", type: "success" });
@@ -112,6 +116,10 @@ export default function ChannelEditPage() {
           <div>
             <label className="block text-sm font-medium">phone_number_id</label>
             <input value={pnid} onChange={(e) => setPnid(e.target.value)} className="mt-1 block w-full border border-slate-300 rounded px-3 py-2" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium">Access Token (WA Cloud)</label>
+            <input value={waToken} onChange={(e) => setWaToken(e.target.value)} className="mt-1 block w-full border border-slate-300 rounded px-3 py-2" type="password" placeholder="****" />
           </div>
           <div>
             <label className="block text-sm font-medium">Estado</label>

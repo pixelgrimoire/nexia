@@ -28,7 +28,12 @@ Notas (MVP):
 - El worker usa `XGROUP/XREADGROUP` con `ACK` para procesar `nf:incoming`.
 - Reintentos automáticos hasta `FLOW_ENGINE_MAX_RETRIES`; al exceder, envía a `nf:incoming:dlq`.
 - Si hay un Flow activo (`flows.status == 'active'`) para el `org_id` del evento entrante, ejecuta un subconjunto del grafo: un nodo `intent` con `map` y varios pasos `action` consecutivos del path (`send_text`, `send_template`, `send_media`). Si no hay flujo, responde con heurística simple (saludo/precio/default).
- - Paso adicional soportado: `set_attribute` (actualiza `contact.attributes[key] = value` si el contacto es localizable por `wa_id/phone`).
+- Pasos adicionales soportados:
+  - `set_attribute` (actualiza `contact.attributes[key] = value` si el contacto es localizable por `wa_id/phone`).
+  - `action: "webhook"` (publica un evento `flow.webhook` en `nf:webhooks` con `data` del paso y contexto básico; el dispatcher entrega a endpoints configurados que incluyan ese tipo de evento).
+  - `wait_for_reply` (pausa el flujo hasta que llegue un mensaje entrante que haga match con `pattern` opcional [regex, ignorecase]).
+    - Campos: `pattern?: string`, `seconds|timeout_seconds?: number`, `timeout_path?: string`.
+    - Implementación: guarda un estado de espera por `org_id/channel/contact` con TTL y token; en el próximo inbound que haga match se reanuda el path en el siguiente paso. Si vence el tiempo, el scheduler publica una reanudación hacia `timeout_path` (si está definido) o continúa con el siguiente paso.
 
 Scheduler (wait/delay):
 - Paso `wait|delay` con `seconds|sec|ms` programa una re-ejecución del flujo a partir del siguiente paso del mismo path.
