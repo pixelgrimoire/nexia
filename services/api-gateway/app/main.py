@@ -538,6 +538,10 @@ def dev_login(body: DevLoginBody, db: Session = Depends(get_db)):
         user.role = body.role
         db.commit()
         db.refresh(user)
+    try:
+        _ensure_default_workspace_for_user(db, user)
+    except Exception:
+        pass
     now = int(time.time())
     exp = now + 7 * 24 * 3600
     token = _mint_jwt({"sub": user.id, "org_id": org.id, "email": user.email, "role": user.role, "iat": now, "exp": exp})
@@ -557,6 +561,143 @@ def current_user(request: Request):
 @app.get("/api/me")
 def me(user: dict = Depends(current_user)):
     return user
+
+
+DEFAULT_WORKSPACE_NAME = "Default workspace"
+_WORKSPACE_MEMBER_ROLES = {"owner", "admin", "member", "agent", "analyst"}
+
+
+def _workspace_role_for_user_role(user_role: str | None) -> str:
+    role = (user_role or "").lower()
+    if role in (Role.owner.value, Role.admin.value):
+        return "owner"
+    return "member"
+
+
+def _ensure_workspace_member(db: Session, workspace_id: str, user_id: str, member_role: str) -> WorkspaceMember:
+    row = (
+        db.query(WorkspaceMember)
+        .filter(WorkspaceMember.workspace_id == workspace_id)
+        .filter(WorkspaceMember.user_id == user_id)
+        .first()
+    )
+    target_role = member_role if member_role in _WORKSPACE_MEMBER_ROLES else "member"
+    if row:
+        if row.role != target_role:
+            row.role = target_role
+            db.commit()
+            db.refresh(row)
+        return row
+    row = WorkspaceMember(
+        id=str(uuid4()),
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=target_role,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _ensure_default_workspace_for_user(db: Session, user: User) -> Workspace:
+    org_id = str(user.org_id)
+    workspace = (
+        db.query(Workspace)
+        .filter(Workspace.org_id == org_id)
+        .order_by(getattr(Workspace, "created_at", Workspace.id))
+        .first()
+    )
+    if not workspace:
+        workspace = Workspace(
+            id=str(uuid4()),
+            org_id=org_id,
+            name=DEFAULT_WORKSPACE_NAME,
+            created_at=datetime.utcnow(),
+        )
+        db.add(workspace)
+        db.commit()
+        db.refresh(workspace)
+    _ensure_workspace_member(db, workspace.id, user.id, _workspace_role_for_user_role(user.role))
+    return workspace
+
+
+def _load_workspace_for_org(db: Session, workspace_id: str, org_id: str) -> Workspace | None:
+    ws = db.get(Workspace, workspace_id)
+    if not ws or str(ws.org_id) != str(org_id):
+        return None
+    return ws
+
+
+def _workspace_out(ws: Workspace, member_count: int | None = None) -> dict:
+    created_ts = None
+    if getattr(ws, "created_at", None):
+        try:
+            created_ts = ws.created_at.timestamp()
+        except Exception:
+            created_ts = None
+    return {
+        "id": ws.id,
+        "org_id": ws.org_id,
+        "name": ws.name,
+        "created_at": created_ts,
+        "member_count": int(member_count or 0),
+    }
+
+
+def _workspace_member_out(member: WorkspaceMember, user_row: User | None = None) -> dict:
+    created_ts = None
+    if getattr(member, "created_at", None):
+        try:
+            created_ts = member.created_at.timestamp()
+        except Exception:
+            created_ts = None
+    return {
+        "id": member.id,
+        "workspace_id": member.workspace_id,
+        "user_id": member.user_id,
+        "role": member.role,
+        "created_at": created_ts,
+        "user_email": getattr(user_row, "email", None),
+        "user_role": getattr(user_row, "role", None),
+    }
+
+
+
+class WorkspaceCreate(BaseModel):
+    name: str
+
+
+class WorkspaceUpdate(BaseModel):
+    name: str | None = None
+
+
+class WorkspaceOut(BaseModel):
+    id: str
+    org_id: str
+    name: str
+    created_at: float | None = None
+    member_count: int = 0
+
+
+class WorkspaceMemberCreate(BaseModel):
+    user_id: str
+    role: str = "member"
+
+
+class WorkspaceMemberUpdate(BaseModel):
+    role: str
+
+
+class WorkspaceMemberOut(BaseModel):
+    id: str
+    workspace_id: str
+    user_id: str
+    role: str
+    user_email: str | None = None
+    user_role: str | None = None
+    created_at: float | None = None
 
 
 # --- Auth real (MVP) --------------------------------------------------------
@@ -632,6 +773,10 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    try:
+        _ensure_default_workspace_for_user(db, user)
+    except Exception:
+        pass
     access = _mint_access(user)
     refresh = _mint_refresh(user, db)
     return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}
@@ -1729,6 +1874,167 @@ def webhooks_delete(wid: str, user: dict = require_roles(Role.admin)):
     except Exception:
         pass
     return {"ok": True}
+# --- Workspaces --------------------------------------------------------------
+
+@app.get("/api/workspaces", response_model=list[WorkspaceOut])
+def list_workspaces(user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    rows = (
+        db.query(Workspace)
+        .filter(Workspace.org_id == user.get("org_id"))
+        .order_by(getattr(Workspace, "created_at", Workspace.id))
+        .all()
+    )
+    counts: dict[str, int] = {}
+    if rows:
+        ids = [ws.id for ws in rows]
+        count_rows = (
+            db.query(WorkspaceMember.workspace_id, func.count(WorkspaceMember.id))
+            .filter(WorkspaceMember.workspace_id.in_(ids))
+            .group_by(WorkspaceMember.workspace_id)
+            .all()
+        )
+        counts = {wid: int(total) for wid, total in count_rows}
+    out: list[WorkspaceOut] = []
+    for ws in rows:
+        out.append(WorkspaceOut(**_workspace_out(ws, counts.get(ws.id, 0))))
+    return out
+
+
+@app.post("/api/workspaces", response_model=WorkspaceOut)
+def create_workspace(body: WorkspaceCreate, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="workspace-name-required")
+    ws = Workspace(id=str(uuid4()), org_id=str(user.get("org_id")), name=name, created_at=datetime.utcnow())
+    db.add(ws)
+    db.commit()
+    db.refresh(ws)
+    try:
+        _ensure_workspace_member(db, ws.id, str(user.get("sub")), "owner")
+        _audit(db, user, "workspace.created", "workspace", ws.id, {"name": name})
+    except Exception:
+        pass
+    return WorkspaceOut(**_workspace_out(ws, 1))
+
+
+@app.put("/api/workspaces/{workspace_id}", response_model=WorkspaceOut)
+def update_workspace(workspace_id: str, body: WorkspaceUpdate, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    ws = _load_workspace_for_org(db, workspace_id, user.get("org_id"))
+    if not ws:
+        raise HTTPException(status_code=404, detail="workspace-not-found")
+    updated = False
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="workspace-name-required")
+        if ws.name != name:
+            ws.name = name
+            updated = True
+    if updated:
+        db.commit()
+        db.refresh(ws)
+        try:
+            _audit(db, user, "workspace.updated", "workspace", ws.id, {"name": ws.name})
+        except Exception:
+            pass
+    member_count = db.query(func.count(WorkspaceMember.id)).filter(WorkspaceMember.workspace_id == ws.id).scalar() or 0
+    return WorkspaceOut(**_workspace_out(ws, member_count))
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: str, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    ws = _load_workspace_for_org(db, workspace_id, user.get("org_id"))
+    if not ws:
+        raise HTTPException(status_code=404, detail="workspace-not-found")
+    total = db.query(Workspace).filter(Workspace.org_id == user.get("org_id")).count()
+    if total <= 1:
+        raise HTTPException(status_code=400, detail="workspace-delete-blocked-last")
+    db.query(WorkspaceMember).filter(WorkspaceMember.workspace_id == ws.id).delete()
+    db.delete(ws)
+    db.commit()
+    try:
+        _audit(db, user, "workspace.deleted", "workspace", workspace_id, None)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.get("/api/workspaces/{workspace_id}/members", response_model=list[WorkspaceMemberOut])
+def list_workspace_members(workspace_id: str, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    ws = _load_workspace_for_org(db, workspace_id, user.get("org_id"))
+    if not ws:
+        raise HTTPException(status_code=404, detail="workspace-not-found")
+    rows = (
+        db.query(WorkspaceMember, User)
+        .join(User, WorkspaceMember.user_id == User.id, isouter=True)
+        .filter(WorkspaceMember.workspace_id == ws.id)
+        .order_by(User.email.asc())
+        .all()
+    )
+    out: list[WorkspaceMemberOut] = []
+    for member, user_row in rows:
+        out.append(WorkspaceMemberOut(**_workspace_member_out(member, user_row)))
+    return out
+
+
+@app.post("/api/workspaces/{workspace_id}/members", response_model=WorkspaceMemberOut)
+def add_workspace_member(workspace_id: str, body: WorkspaceMemberCreate, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    ws = _load_workspace_for_org(db, workspace_id, user.get("org_id"))
+    if not ws:
+        raise HTTPException(status_code=404, detail="workspace-not-found")
+    target_user = db.get(User, body.user_id)
+    if not target_user or str(target_user.org_id) != str(user.get("org_id")):
+        raise HTTPException(status_code=404, detail="user-not-found")
+    role = body.role if body.role in _WORKSPACE_MEMBER_ROLES else None
+    if role is None:
+        raise HTTPException(status_code=400, detail="workspace-role-invalid")
+    member = _ensure_workspace_member(db, ws.id, target_user.id, role)
+    try:
+        _audit(db, user, "workspace.member.added", "workspace", ws.id, {"member_id": member.id, "role": member.role})
+    except Exception:
+        pass
+    return WorkspaceMemberOut(**_workspace_member_out(member, target_user))
+
+
+@app.put("/api/workspaces/{workspace_id}/members/{member_id}", response_model=WorkspaceMemberOut)
+def update_workspace_member(workspace_id: str, member_id: str, body: WorkspaceMemberUpdate, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    ws = _load_workspace_for_org(db, workspace_id, user.get("org_id"))
+    if not ws:
+        raise HTTPException(status_code=404, detail="workspace-not-found")
+    member = db.get(WorkspaceMember, member_id)
+    if not member or member.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="member-not-found")
+    role = body.role if body.role in _WORKSPACE_MEMBER_ROLES else None
+    if role is None:
+        raise HTTPException(status_code=400, detail="workspace-role-invalid")
+    if member.role != role:
+        member.role = role
+        db.commit()
+        db.refresh(member)
+        try:
+            _audit(db, user, "workspace.member.updated", "workspace", ws.id, {"member_id": member.id, "role": member.role})
+        except Exception:
+            pass
+    target_user = db.get(User, member.user_id)
+    return WorkspaceMemberOut(**_workspace_member_out(member, target_user))
+
+
+@app.delete("/api/workspaces/{workspace_id}/members/{member_id}")
+def delete_workspace_member(workspace_id: str, member_id: str, user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
+    ws = _load_workspace_for_org(db, workspace_id, user.get("org_id"))
+    if not ws:
+        raise HTTPException(status_code=404, detail="workspace-not-found")
+    member = db.get(WorkspaceMember, member_id)
+    if not member or member.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="member-not-found")
+    db.delete(member)
+    db.commit()
+    try:
+        _audit(db, user, "workspace.member.deleted", "workspace", ws.id, {"member_id": member.id})
+    except Exception:
+        pass
+    return {"ok": True}
+
 # ----------------------------------------------------------------------------
 # Channels (tenancy + uniqueness)
 
@@ -2204,7 +2510,7 @@ def delete_flow(flow_id: str, user: dict = require_roles(Role.admin), db: Sessio
     return {"ok": True}
 
 # ----------------------------------------------------------------------------
-# Contacts (CRUD + simple search) — mirrors services/contacts for convenience
+# Contacts (CRUD + simple search) - mirrors services/contacts for convenience
 
 try:
     from pydantic import ConfigDict  # type: ignore
@@ -2411,3 +2717,8 @@ def search_contacts(
             timezone=getattr(c, 'timezone', None),
         ))
     return out
+
+
+
+
+

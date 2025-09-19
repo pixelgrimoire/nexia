@@ -144,3 +144,21 @@ class AuditLog(Base):
     entity_id = Column(String)      # id of the entity when applicable
     data = Column(JSONType)         # small payload snapshot
     created_at = Column(DateTime)
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    id = Column(String, primary_key=True)
+    org_id = Column(ForeignKey("organizations.id"))
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime)
+
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+    id = Column(String, primary_key=True)
+    workspace_id = Column(ForeignKey("workspaces.id"))
+    user_id = Column(ForeignKey("users.id"))
+    role = Column(String, nullable=False)
+    created_at = Column(DateTime)
+

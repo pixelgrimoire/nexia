@@ -94,9 +94,9 @@ export default function DashboardPage() {
   }, []);
 
   const openConversations = kpis?.open_conversations ?? conversations.filter((c) => c.state === 'open').length;
-  const avgMessagesPerConversation = kpis?.avg_messages_per_conversation != null ? kpis.avg_messages_per_conversation.toFixed(1) : '—';
+  const avgMessagesPerConversation = kpis?.avg_messages_per_conversation != null ? kpis.avg_messages_per_conversation.toFixed(1) : '--';
   const flowCompletionRate =
-    kpis?.flow_completion_rate != null ? `${Math.round(kpis.flow_completion_rate * 100)}%` : '—';
+    kpis?.flow_completion_rate != null ? `${Math.round(kpis.flow_completion_rate * 100)}%` : '--';
 
   const triggerDownload = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -144,7 +144,7 @@ export default function DashboardPage() {
     <main className="space-y-8">
       <div>
         <h1 className="text-3xl font-bold text-slate-800">Bienvenido a NexIA</h1>
-        <p className="text-slate-500 mt-1">Aquí tienes un resumen de tu actividad reciente.</p>
+        <p className="text-slate-500 mt-1">Aqui tienes un resumen de tu actividad reciente.</p>
       </div>
 
       {error && <p className="text-red-600 bg-red-100 p-3 rounded-lg">{error}</p>}
@@ -180,12 +180,12 @@ export default function DashboardPage() {
               />
               <StatCard
                 title="Tiempo 1a Respuesta (s)"
-                value={kpis.avg_first_response_seconds != null ? Math.round(kpis.avg_first_response_seconds) : '—'}
+                value={kpis.avg_first_response_seconds != null ? Math.round(kpis.avg_first_response_seconds) : '--'}
                 icon={<MessageSquare className="text-slate-500" />}
               />
               <StatCard
                 title="Tasa de Respuesta"
-                value={kpis.response_rate != null ? `${Math.round(kpis.response_rate * 100)}%` : '—'}
+                value={kpis.response_rate != null ? `${Math.round(kpis.response_rate * 100)}%` : '--'}
                 icon={<Users className="text-slate-500" />}
               />
               <StatCard
@@ -195,19 +195,19 @@ export default function DashboardPage() {
               />
               <StatCard
                 title="Flow Completion"
-                value={kpis.flow_runs_total > 0 ? flowCompletionRate : '—'}
+                value={kpis.flow_runs_total > 0 ? flowCompletionRate : '--'}
                 icon={<Workflow className="text-slate-500" />}
               />
             </div>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-             {/* --- Acciones Rápidas --- */}
+             {/* --- Acciones Rapidas --- */}
             <div className="lg:col-span-1 space-y-6">
-                 <h2 className="text-xl font-bold text-slate-800">Acciones Rápidas</h2>
+                 <h2 className="text-xl font-bold text-slate-800">Acciones Rapidas</h2>
                 <div className="grid grid-cols-1 gap-4">
-                    <QuickActionButton title="Crear un Flujo de Automatización" href="/flows/builder" icon={<Workflow size={24}/>} />
-                    <QuickActionButton title="Añadir un Nuevo Contacto" href="/contacts" icon={<Users size={24}/>} />
+                    <QuickActionButton title="Crear un Flujo de Automatizacion" href="/flows/builder" icon={<Workflow size={24}/>} />
+                    <QuickActionButton title="Anadir un Nuevo Contacto" href="/contacts" icon={<Users size={24}/>} />
                     <QuickActionButton title="Ver Bandeja de Entrada" href="/inbox" icon={<MessageSquare size={24}/>} />
                 </div>
 
@@ -215,7 +215,7 @@ export default function DashboardPage() {
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
                   <h3 className="font-semibold text-slate-800">Exportar Analytics</h3>
                   <div>
-                    <label className="block text-sm text-slate-600">Límite (1–1000)</label>
+                    <label className="block text-sm text-slate-600">Limite (1-1000)</label>
                     <input
                       type="number"
                       min={1}
@@ -227,10 +227,10 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex gap-2">
                     <button onClick={onExportCsv} disabled={exportingCsv} className="px-3 py-2 rounded bg-slate-900 text-white disabled:opacity-60 text-sm">
-                      {exportingCsv ? 'Exportando…' : 'Exportar CSV'}
+                      {exportingCsv ? 'Exportando...' : 'Exportar CSV'}
                     </button>
                     <button onClick={onExportJson} disabled={exportingJson} className="px-3 py-2 rounded border border-slate-300 text-sm">
-                      {exportingJson ? 'Exportando…' : 'Exportar JSON'}
+                      {exportingJson ? 'Exportando...' : 'Exportar JSON'}
                     </button>
                   </div>
                 </div>
@@ -266,3 +266,6 @@ export default function DashboardPage() {
     </main>
   );
 }
+
+
+
