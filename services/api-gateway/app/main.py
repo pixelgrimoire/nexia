@@ -74,6 +74,9 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio12345")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "nexia-uploads")
 
+# Consent enforcement (opt-in)
+CONSENT_ENFORCE = os.getenv("CONSENT_ENFORCE", "false").lower() == "true"
+
 # simple in-process fixed-window rate limiter: key -> {window_ts: count}
 _rate_counters: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
 # simple in-process metrics
@@ -403,6 +406,25 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
         if not isinstance(media, dict) or media.get("kind") not in ("image", "document", "video", "audio") or not media.get("link"):
             raise HTTPException(status_code=400, detail="media-invalid")
         payload["media"] = json.dumps(media)
+    # Consent enforcement when a matching contact exists
+    if CONSENT_ENFORCE:
+        try:
+            ct = (
+                db.query(Contact)
+                .filter(Contact.org_id == str(user.get("org_id")))
+                .filter((Contact.wa_id == payload.get("to")) | (Contact.phone == payload.get("to")))
+                .first()
+            )
+            if ct is not None:
+                consent = (getattr(ct, "consent", None) or "").strip().lower()
+                allowed = consent in ("opt_in", "granted", "yes", "true")
+                if not allowed:
+                    raise HTTPException(status_code=403, detail="consent-required")
+        except HTTPException:
+            raise
+        except Exception:
+            # be permissive on DB errors in dev
+            pass
     # Enforce WhatsApp 24h window for text messages when possible (best-effort)
     if WA_WINDOW_ENFORCE and msg_type == "text":
         try:
@@ -467,6 +489,7 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
 async def inbox_stream(request: Request, user: dict = require_roles(Role.owner, Role.admin, Role.agent)):
 	async def event_gen():
 		last_id = "$"
+		org_id = str(user.get("org_id")) if user else ""
 		while True:
 			if await request.is_disconnected():
 				break
@@ -479,6 +502,14 @@ async def inbox_stream(request: Request, user: dict = require_roles(Role.owner, 
 				for stream, msgs in items:
 					for msg_id, fields in msgs:
 						last_id = msg_id
+						# Scope events to the caller's organization (best-effort, default deny on missing org)
+						try:
+							evt_org = str(fields.get("org_id")) if isinstance(fields, dict) else None
+							if not evt_org or (org_id and evt_org != org_id):
+								continue
+						except Exception:
+							# On any parsing error, do not leak
+							continue
 						data = fields.get("payload") or json.dumps(fields)
 						yield {"event": "message", "id": msg_id, "data": data}
 			except Exception:
@@ -1200,6 +1231,20 @@ def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles
             except Exception:
                 pass
             raise HTTPException(status_code=422, detail="outside-24h-window - use approved template")
+    # Consent enforcement for conversation's contact (before persisting outbound)
+    if CONSENT_ENFORCE:
+        try:
+            c0 = db.get(Contact, conv.contact_id)
+            if c0 is not None:
+                consent = (getattr(c0, "consent", None) or "").strip().lower()
+                allowed = consent in ("opt_in", "granted", "yes", "true")
+                if not allowed:
+                    raise HTTPException(status_code=403, detail="consent-required")
+        except HTTPException:
+            raise
+        except Exception:
+            # be permissive on DB errors in dev
+            pass
     content: dict | None = None
     tpl_json: str | None = None
     media_json: str | None = None

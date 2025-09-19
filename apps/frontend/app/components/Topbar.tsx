@@ -1,7 +1,7 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { authLogout, getMe, listConversations, subscribeInbox, type JWT } from "../lib/api";
-import { clearTokens, getAccessToken, getRefreshToken } from "../lib/auth";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { authLogout, getMe, listConversations, subscribeInbox, listMyWorkspaces, type JWT, type WorkspaceMembership } from "../lib/api";
+import { clearTokens, getAccessToken, getRefreshToken, getCurrentWorkspaceId, setCurrentWorkspaceId, getWorkspaceMemberships, setWorkspaceMemberships } from "../lib/auth";
 import Link from "next/link";
 import Toast from "../components/Toast";
 import { setupGSAP, gsap } from "../lib/gsapSetup";
@@ -23,6 +23,8 @@ export default function Topbar() {
   const stopSubscriptionRef = useRef<(() => void) | null>(null);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [workspaces, setWorkspaces] = useState<WorkspaceMembership[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const fetchUnread = useCallback((token: JWT) => {
     listConversations(token, { include_unread: true, limit: 200 })
       .then((rows) => setUnread(rows.reduce((acc: number, r: any) => acc + (r.unread || 0), 0)))
@@ -30,11 +32,42 @@ export default function Topbar() {
   }, []);
   const dotColor = sseStatus === "connected" ? "bg-emerald-500" : sseStatus === "reconnecting" ? "bg-amber-500" : sseStatus === "connecting" ? "bg-slate-400" : "bg-slate-300";
 
-  useEffect(() => {
+    useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedWorkspaces = getWorkspaceMemberships();
+    setWorkspaces(storedWorkspaces);
+    const storedId = getCurrentWorkspaceId();
+    if (storedId) {
+      setActiveWorkspaceId(storedId);
+    } else if (storedWorkspaces.length) {
+      const fallback = storedWorkspaces[0]?.workspace_id ?? null;
+      setActiveWorkspaceId(fallback);
+      setCurrentWorkspaceId(fallback);
+    }
+  }, []);
+
+useEffect(() => {
     const token = getAccessToken() as JWT | null;
     if (!token) return;
 
     let cancelled = false;
+
+    listMyWorkspaces(token)
+      .then((items) => {
+        setWorkspaces(items);
+        setWorkspaceMemberships(items);
+        const storedId = getCurrentWorkspaceId();
+        if (!storedId && items.length) {
+          const fallback = items[0]?.workspace_id ?? null;
+          setActiveWorkspaceId(fallback);
+          setCurrentWorkspaceId(fallback);
+        } else if (storedId && items.length && !items.some((w) => w.workspace_id === storedId)) {
+          const fallback = items[0]?.workspace_id ?? null;
+          setActiveWorkspaceId(fallback);
+          setCurrentWorkspaceId(fallback);
+        }
+      })
+      .catch(() => {});
 
     getMe(token)
       .then((u) => {
@@ -171,6 +204,13 @@ export default function Topbar() {
       { href: "/audit", label: "Auditoría", icon: <ScrollText size={18}/>, adminOnly: true },
   ];
 
+  const onWorkspaceChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const nextId = event.target.value || null;
+    setActiveWorkspaceId(nextId);
+    setCurrentWorkspaceId(nextId);
+    setToast({ msg: nextId ? "Workspace actualizado" : "Workspace sin seleccionar", type: "success" });
+  };
+
   const settingsItems = [
       { href: "/channels", label: "Canales", adminOnly: true },
       { href: "/templates", label: "Plantillas", adminOnly: true },
@@ -184,6 +224,23 @@ export default function Topbar() {
     <header className="mb-6 flex items-center justify-between">
       <nav className="flex items-center gap-2">
         <Link href="/dashboard" className="font-bold tracking-tight text-xl mr-4">NexIA</Link>
+        {workspaces.length > 0 && (
+          <div className="flex items-center gap-2 mr-4">
+            <label htmlFor="workspace-select" className="text-xs text-slate-500">Workspace</label>
+            <select
+              id="workspace-select"
+              value={activeWorkspaceId ?? ''}
+              onChange={onWorkspaceChange}
+              className="border border-slate-300 rounded px-2 py-1 text-sm bg-white"
+            >
+              {workspaces.map((ws) => (
+                <option key={ws.workspace_id} value={ws.workspace_id}>
+                  {ws.workspace_name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         
         {navItems.map(item => {
             // Admin-only items are visible to admin/owner; allow analyst to see Analytics/Auditoría
@@ -254,3 +311,4 @@ export default function Topbar() {
     </>
   );
 }
+

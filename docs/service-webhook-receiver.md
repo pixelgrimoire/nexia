@@ -6,6 +6,7 @@ Responsabilidades:
 - Verificar token y firma de Meta
 - Fan-out de eventos a Redis (`nf:inbox`, `nf:incoming`)
 - Enriquecimiento multi-tenant: resuelve `org_id` y `channel_id` a partir de `metadata.phone_number_id` (o `display_phone_number`) consultando la tabla `channels`.
+- Actualiza estados de mensajes salientes a partir de `statuses[]` del webhook (sent/delivered/read/failed) haciendo match por `wa_msg_id` y emite evento `message.status` en `nf:webhooks`.
 
 Variables de entorno:
 - `REDIS_URL`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`

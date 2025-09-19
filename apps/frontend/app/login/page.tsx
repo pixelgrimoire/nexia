@@ -15,8 +15,8 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      const { access_token } = await devLogin(email, org, role);
-      setTokens(access_token, null);
+      const { access_token, default_workspace_id, workspaces } = await devLogin(email, org, role);
+      setTokens(access_token, null, { defaultWorkspaceId: default_workspace_id ?? null, workspaces: workspaces ?? null });
       // sanity check
       await getMe(access_token);
       location.assign("/conversations");

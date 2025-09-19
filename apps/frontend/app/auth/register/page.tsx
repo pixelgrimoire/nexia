@@ -16,8 +16,8 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
     try {
-      const { access_token, refresh_token } = await authRegister(email, password, org, "admin");
-      setTokens(access_token, refresh_token);
+      const { access_token, refresh_token, default_workspace_id, workspaces } = await authRegister(email, password, org, "admin");
+      setTokens(access_token, refresh_token, { defaultWorkspaceId: default_workspace_id ?? null, workspaces: workspaces ?? null });
       await getMe(access_token);
       location.assign("/conversations");
     } catch (err: any) {
