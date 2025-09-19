@@ -11,6 +11,7 @@ export default function AuditPage() {
   const [qAction, setQAction] = useState("");
   const [qEntityType, setQEntityType] = useState("");
   const [qEntityId, setQEntityId] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     setToken(getAccessToken() as JWT | null);
@@ -46,7 +47,36 @@ export default function AuditPage() {
     <main className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Auditoría</h1>
-        <button onClick={load} className="px-3 py-2 rounded border border-slate-300 text-sm">Refrescar</button>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="px-3 py-2 rounded border border-slate-300 text-sm">Refrescar</button>
+          <button
+            onClick={async () => {
+              if (!token) return;
+              setExporting(true);
+              try {
+                const qs = new URLSearchParams();
+                qs.set('format', 'csv');
+                if (qAction.trim()) qs.set('action', qAction.trim());
+                if (qEntityType.trim()) qs.set('entity_type', qEntityType.trim());
+                if (qEntityId.trim()) qs.set('entity_id', qEntityId.trim());
+                const res = await fetch(`/api/audit/export?${qs.toString()}`);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `audit-export-${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              } finally {
+                setExporting(false);
+              }
+            }}
+            className="px-3 py-2 rounded border border-emerald-300 text-emerald-700 text-sm"
+            disabled={exporting}
+          >{exporting ? 'Exportando…' : 'Exportar CSV'}</button>
+        </div>
       </div>
       {!hasToken && <p className="text-red-600">Ve a /auth/login primero.</p>}
       {error && <p className="text-red-600">{error}</p>}
@@ -98,4 +128,3 @@ export default function AuditPage() {
     </main>
   );
 }
-

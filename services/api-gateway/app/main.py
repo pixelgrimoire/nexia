@@ -316,8 +316,10 @@ class SendMessage(BaseModel):
 
 
 class Role(str, Enum):
+    owner = "owner"
     admin = "admin"
     agent = "agent"
+    analyst = "analyst"
 
 
 def require_roles(*roles: Role):
@@ -350,7 +352,7 @@ async def healthz():
 
 
 @app.post("/api/messages/send")
-async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent), request: Request = None, db: Session = Depends(lambda: SessionLocal())):
+async def send_message(body: SendMessage, user: dict = require_roles(Role.admin, Role.agent, Role.owner), request: Request = None, db: Session = Depends(lambda: SessionLocal())):
     # rate limit per org+route
     _enforce_rate_limit(f"send:{user.get('org_id','anon')}")
     # idempotency
@@ -873,7 +875,7 @@ class AttachmentOut(BaseModel):
 
 
 @app.get("/api/conversations/{conv_id}/messages", response_model=list[MessageOut])
-def list_messages(conv_id: str, limit: int = 100, offset: int = 0, after_id: str | None = None, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_messages(conv_id: str, limit: int = 100, offset: int = 0, after_id: str | None = None, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")
@@ -948,7 +950,7 @@ def _audit(db: Session, user: dict, action: str, entity_type: str, entity_id: st
 
 
 @app.post("/api/conversations/{conv_id}/messages", response_model=MessageOut)
-def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal()), request: Request = None):
+def create_message(conv_id: str, body: MessageCreate, user: dict = require_roles(Role.admin, Role.agent, Role.owner), db: Session = Depends(lambda: SessionLocal()), request: Request = None):
     _enforce_rate_limit(f"convmsg:{user.get('org_id','anon')}")
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
@@ -1197,7 +1199,7 @@ class WebhookEventOut(BaseModel):
 
 
 @app.get("/api/integrations/webhooks/events", response_model=list[WebhookEventOut])
-def webhooks_events(kind: str = "delivered", limit: int = 50, user: dict = require_roles(Role.admin)):
+def webhooks_events(kind: str = "delivered", limit: int = 50, user: dict = require_roles(Role.admin, Role.owner, Role.analyst)):
     stream = "wh:delivered" if kind == "delivered" else "nf:webhooks:dlq"
     try:
         raw = redis.xrevrange(stream, count=min(max(limit, 1), 200))
@@ -1235,7 +1237,7 @@ class WebhookTestIn(BaseModel):
 
 
 @app.post("/api/integrations/webhooks/test")
-def webhooks_test(body: WebhookTestIn, user: dict = require_roles(Role.admin)):
+def webhooks_test(body: WebhookTestIn, user: dict = require_roles(Role.admin, Role.owner)):
     evt = {
         "org_id": str(user.get("org_id")),
         "type": str(body.event_type or "webhook.test"),
@@ -1255,7 +1257,7 @@ class WebhookRetryIn(BaseModel):
 
 
 @app.post("/api/integrations/webhooks/retry")
-def webhooks_retry(body: WebhookRetryIn, user: dict = require_roles(Role.admin)):
+def webhooks_retry(body: WebhookRetryIn, user: dict = require_roles(Role.admin, Role.owner)):
     dlq = "nf:webhooks:dlq"
     try:
         rows = redis.xrange(dlq, min=body.id, max=body.id)
@@ -1298,7 +1300,7 @@ def webhooks_retry(body: WebhookRetryIn, user: dict = require_roles(Role.admin))
 
 
 @app.get("/api/integrations/metrics")
-def integrations_metrics(user: dict = require_roles(Role.admin)):
+def integrations_metrics(user: dict = require_roles(Role.admin, Role.owner, Role.analyst)):
     """Aggregate simple metrics for integrations and messaging components."""
     mgw_int = _fetch_mgw_metrics()
     wh_delivered = None
@@ -1517,6 +1519,61 @@ def list_audit(
             )
         )
     return out
+
+
+@app.get("/api/audit/export")
+def export_audit(
+    format: str = "csv",
+    limit: int = 1000,
+    action: str | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    user: dict = require_roles(Role.admin),
+    db: Session = Depends(lambda: SessionLocal()),
+):
+    # reuse query from list_audit
+    try:
+        q = db.query(AuditLog).filter(getattr(AuditLog, 'org_id') == str(user.get('org_id')))
+        if action:
+            q = q.filter(getattr(AuditLog, 'action') == action)
+        if entity_type:
+            q = q.filter(getattr(AuditLog, 'entity_type') == entity_type)
+        if entity_id:
+            q = q.filter(getattr(AuditLog, 'entity_id') == entity_id)
+        order_col = getattr(AuditLog, 'created_at', None)
+        if order_col is not None:
+            q = q.order_by(order_col.desc())
+        rows = q.limit(min(max(limit, 1), 10000)).all()
+    except Exception:
+        rows = []
+    items = []
+    for r in rows:
+        ts = None
+        try:
+            ts = r.created_at.isoformat() if getattr(r, 'created_at', None) else None
+        except Exception:
+            ts = None
+        items.append({
+            "id": r.id,
+            "org_id": r.org_id,
+            "actor": getattr(r, 'actor', None),
+            "action": r.action,
+            "entity_type": getattr(r, 'entity_type', None),
+            "entity_id": getattr(r, 'entity_id', None),
+            "data": json.dumps(getattr(r, 'data', None) or {}),
+            "created_at": ts,
+        })
+    if (format or "").lower() == "json":
+        return JSONResponse(items)
+    # CSV
+    import io, csv
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=["id","org_id","actor","action","entity_type","entity_id","data","created_at"])
+    w.writeheader()
+    for it in items:
+        w.writerow(it)
+    data = buf.getvalue()
+    return Response(content=data, media_type="text/csv")
 
 
 @app.get("/internal/status")
@@ -1741,7 +1798,7 @@ def create_channel(body: ChannelCreate, user: dict = require_roles(Role.admin), 
 
 
 @app.get("/api/channels", response_model=list[ChannelOut])
-def list_channels(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_channels(user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     rows = db.query(Channel).filter(Channel.org_id == user.get("org_id")).all()
     return [ChannelOut(id=r.id, org_id=r.org_id, type=r.type, mode=r.mode, status=r.status, phone_number=r.phone_number, credentials=_sanitize_credentials(r.credentials)) for r in rows]
 
@@ -1758,7 +1815,7 @@ def _load_channel_for_org(db: Session, ch_id: str, org_id: str) -> Channel | Non
 
 
 @app.get("/api/channels/{ch_id}", response_model=ChannelOut)
-def get_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def get_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     ch = _load_channel_for_org(db, ch_id, user.get("org_id"))
     if not ch:
         raise HTTPException(status_code=404, detail="channel not found")
@@ -1830,7 +1887,7 @@ class ChannelVerifyOut(BaseModel):
 
 
 @app.post("/api/channels/{ch_id}/verify", response_model=ChannelVerifyOut)
-def verify_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def verify_channel(ch_id: str, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     ch = _load_channel_for_org(db, ch_id, user.get("org_id"))
     if not ch:
         raise HTTPException(status_code=404, detail="channel not found")
@@ -1932,6 +1989,10 @@ def create_template(body: TemplateCreate, user: dict = require_roles(Role.admin)
     )
     db.add(row)
     db.commit()
+    try:
+        _audit(db, user, "template.created", "template", tid, {"name": body.name, "language": body.language})
+    except Exception:
+        pass
     return TemplateOut(
         id=row.id,
         org_id=row.org_id,
@@ -1945,7 +2006,7 @@ def create_template(body: TemplateCreate, user: dict = require_roles(Role.admin)
 
 
 @app.get("/api/templates", response_model=list[TemplateOut])
-def list_templates(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_templates(user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     rows = db.query(DBTemplate).filter(DBTemplate.org_id == user.get("org_id")).all()
     out: list[TemplateOut] = []
     for r in rows:
@@ -1972,7 +2033,7 @@ def _load_template_for_org(db: Session, tpl_id: str, org_id: str) -> DBTemplate 
 
 
 @app.get("/api/templates/{tpl_id}", response_model=TemplateOut)
-def get_template(tpl_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def get_template(tpl_id: str, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     r = _load_template_for_org(db, tpl_id, user.get("org_id"))
     if not r:
         raise HTTPException(status_code=404, detail="template not found")
@@ -2003,6 +2064,10 @@ def update_template(tpl_id: str, body: TemplateUpdate, user: dict = require_role
         r.status = body.status
     db.commit()
     db.refresh(r)
+    try:
+        _audit(db, user, "template.updated", "template", tpl_id, {"status": r.status})
+    except Exception:
+        pass
     return TemplateOut(id=r.id, org_id=r.org_id, name=r.name, language=r.language, category=r.category, body=r.body, variables=r.variables, status=r.status)
 
 
@@ -2013,6 +2078,10 @@ def delete_template(tpl_id: str, user: dict = require_roles(Role.admin), db: Ses
         raise HTTPException(status_code=404, detail="template not found")
     db.delete(r)
     db.commit()
+    try:
+        _audit(db, user, "template.deleted", "template", tpl_id, None)
+    except Exception:
+        pass
     return {"ok": True}
 
 # ----------------------------------------------------------------------------
@@ -2044,7 +2113,7 @@ class FlowOut(BaseModel):
 
 
 @app.get("/api/flows", response_model=list[FlowOut])
-def list_flows(user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_flows(user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     rows = db.query(DBFlow).filter(DBFlow.org_id == user.get("org_id")).order_by(getattr(DBFlow, 'version', 0).desc()).all()
     out: list[FlowOut] = []
     for r in rows:

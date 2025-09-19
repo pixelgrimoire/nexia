@@ -6,7 +6,7 @@ import { setTokens } from "../lib/auth";
 export default function LoginPage() {
   const [email, setEmail] = useState("dev@example.com");
   const [org, setOrg] = useState("Acme");
-  const [role, setRole] = useState<"admin" | "agent">("admin");
+  const [role, setRole] = useState<"owner" | "admin" | "agent" | "analyst">("admin");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,8 +56,10 @@ export default function LoginPage() {
             onChange={(e) => setRole(e.target.value as any)}
             className="mt-1 block w-full border border-slate-300 rounded px-3 py-2"
           >
+            <option value="owner">owner</option>
             <option value="admin">admin</option>
             <option value="agent">agent</option>
+            <option value="analyst">analyst</option>
           </select>
         </div>
         <button

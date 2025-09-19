@@ -7,11 +7,11 @@ import Toast from "../components/Toast";
 import { setupGSAP, gsap } from "../lib/gsapSetup";
 import { useGSAP } from "@gsap/react";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, MessageSquare, Users, Workflow, Settings, LogOut, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Users, Workflow, Settings, LogOut, BarChart3, ScrollText } from 'lucide-react';
 
 export default function Topbar() {
   const [email, setEmail] = useState<string | null>(null);
-  const [role, setRole] = useState<"admin" | "agent" | null>(null);
+  const [role, setRole] = useState<"owner" | "admin" | "agent" | "analyst" | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unread, setUnread] = useState<number>(0);
@@ -29,7 +29,7 @@ export default function Topbar() {
       .then((u) => {
         setEmail(String((u as any)?.email || ""));
         const r = String((u as any)?.role || "");
-        if (r === "admin" || r === "agent") setRole(r as any);
+        if (r === "owner" || r === "admin" || r === "agent" || r === "analyst") setRole(r as any);
       })
       .catch(() => setEmail(null));
     
@@ -103,6 +103,7 @@ export default function Topbar() {
       { href: "/contacts", label: "Contactos", icon: <Users size={18}/>, adminOnly: false },
       { href: "/flows", label: "Flujos", icon: <Workflow size={18}/>, adminOnly: true },
       { href: "/analytics", label: "Analytics", icon: <BarChart3 size={18}/>, adminOnly: true },
+      { href: "/audit", label: "Auditoría", icon: <ScrollText size={18}/>, adminOnly: true },
   ];
 
   const settingsItems = [
@@ -120,7 +121,8 @@ export default function Topbar() {
         <Link href="/dashboard" className="font-bold tracking-tight text-xl mr-4">NexIA</Link>
         
         {navItems.map(item => {
-            if (item.adminOnly && role !== 'admin') return null;
+            // Admin-only items are visible to admin/owner; allow analyst to see Analytics/Auditoría
+            if (item.adminOnly && !(role === 'admin' || role === 'owner' || (role === 'analyst' && (item.href === '/analytics' || item.href === '/audit')))) return null;
             const active = isActive(item.href);
             return (
                 <Link key={item.href} href={item.href} 
@@ -146,7 +148,7 @@ export default function Topbar() {
         </div>
         {email ? (
             <div className="flex items-center gap-3">
-                 {(role === "admin") && (
+                 {(role === "admin" || role === "owner") && (
                      <div className="group relative">
                         <button className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-200 transition-colors">
                             <Settings size={18}/>
