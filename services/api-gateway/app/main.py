@@ -325,7 +325,12 @@ class Role(str, Enum):
 def require_roles(*roles: Role):
     async def checker(request: Request):
         user = getattr(request.state, "user", None)
-        if not user or user.get("role") not in [r.value for r in roles]:
+        user_role = user.get("role") if user else None
+        allowed = {r.value for r in roles}
+        # Owners inherit admin capabilities by default
+        if user_role == Role.owner.value and Role.admin.value in allowed:
+            return user
+        if not user or user_role not in allowed:
             raise HTTPException(status_code=403, detail="forbidden")
         return user
     return Depends(checker)
@@ -459,7 +464,7 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
 
 # SSE inbox stream using sse-starlette-style EventSourceResponse
 @app.get("/api/inbox/stream")
-async def inbox_stream(request: Request, user: dict = require_roles(Role.owner, Role.admin, Role.agent, Role.analyst)):
+async def inbox_stream(request: Request, user: dict = require_roles(Role.owner, Role.admin, Role.agent)):
 	async def event_gen():
 		last_id = "$"
 		while True:
@@ -765,7 +770,7 @@ def create_conversation(body: ConversationCreate, user: dict = require_roles(Rol
 
 
 @app.get("/api/conversations", response_model=list[ConversationOut])
-def list_conversations(state: str | None = None, limit: int = 50, include_unread: bool = False, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_conversations(state: str | None = None, limit: int = 50, include_unread: bool = False, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     q = db.query(Conversation).filter(Conversation.org_id == user.get("org_id"))
     if state:
         q = q.filter(Conversation.state == state)
@@ -807,7 +812,7 @@ def _load_conv_for_org(db: Session, conv_id: str, org_id: str) -> Conversation |
 
 
 @app.get("/api/conversations/{conv_id}", response_model=ConversationOut)
-def get_conversation(conv_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def get_conversation(conv_id: str, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")
@@ -815,7 +820,7 @@ def get_conversation(conv_id: str, user: dict = require_roles(Role.admin, Role.a
 
 
 @app.put("/api/conversations/{conv_id}", response_model=ConversationOut)
-def update_conversation(conv_id: str, body: ConversationUpdate, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def update_conversation(conv_id: str, body: ConversationUpdate, user: dict = require_roles(Role.admin, Role.agent, Role.owner), db: Session = Depends(lambda: SessionLocal())):
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")
@@ -1111,7 +1116,7 @@ class NoteCreate(BaseModel):
 
 
 @app.get("/api/conversations/{conv_id}/notes", response_model=list[NoteOut])
-def list_notes(conv_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_notes(conv_id: str, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")
@@ -1340,7 +1345,7 @@ class AttachmentCreate(BaseModel):
 
 
 @app.get("/api/conversations/{conv_id}/attachments", response_model=list[AttachmentOut])
-def list_attachments(conv_id: str, user: dict = require_roles(Role.admin, Role.agent), db: Session = Depends(lambda: SessionLocal())):
+def list_attachments(conv_id: str, user: dict = require_roles(Role.admin, Role.agent, Role.owner, Role.analyst), db: Session = Depends(lambda: SessionLocal())):
     conv = _load_conv_for_org(db, conv_id, user.get("org_id"))
     if not conv:
         raise HTTPException(status_code=404, detail="conversation not found")

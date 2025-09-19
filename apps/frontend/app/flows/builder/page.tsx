@@ -24,6 +24,8 @@ import {
   PlayCircle,
   Settings2,
   Bot,
+  TimerReset,
+  SatelliteDish,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Toast from "../../components/Toast";
@@ -121,13 +123,49 @@ function DelayNode({ data }: any) {
   );
 }
 
-function TagNode({ data }: any) {
+
+function AttributeNode({ data }: any) {
   return (
     <div>
       <Handle type="target" position={Position.Top} />
       <Handle type="source" position={Position.Bottom} />
-      <NodeShell color="bg-teal-600" title={data.label || "Tag conversation"} subtitle="CRM" icon={<TagIcon size={16} />}> 
-        <div>{data.description || "Add tag: high-value"}</div>
+      <NodeShell color="bg-teal-600" title={data.label || "Set attribute"} subtitle="Attributes" icon={<TagIcon size={16} />}>
+        <div className="space-y-1">
+          <div>{data.key ? `${data.key} = ${data.value ?? 'value'}` : data.description || 'Set attribute key/value'}</div>
+        </div>
+      </NodeShell>
+    </div>
+  );
+}
+
+function WaitReplyNode({ data }: any) {
+  const pattern = data.pattern ? `Pattern: ${data.pattern}` : 'Await reply';
+  const timeout = data.seconds ? `${data.seconds}s timeout` : 'No timeout';
+  return (
+    <div>
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Bottom} />
+      <NodeShell color="bg-slate-700" title={data.label || "Wait for reply"} subtitle="Pause" icon={<TimerReset size={16} />}>
+        <div className="space-y-1">
+          <div>{pattern}</div>
+          <div>{timeout}</div>
+        </div>
+      </NodeShell>
+    </div>
+  );
+}
+
+function WebhookNode({ data }: any) {
+  const url = data.url || 'https://example.com/hook';
+  return (
+    <div>
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Bottom} />
+      <NodeShell color="bg-indigo-600" title={data.label || "Webhook"} subtitle="External call" icon={<SatelliteDish size={16} />}>
+        <div className="space-y-1">
+          <div className="truncate">URL: {url}</div>
+          <div>{data.payload ? 'Payload ready' : 'No payload'}</div>
+        </div>
       </NodeShell>
     </div>
   );
@@ -139,7 +177,10 @@ const nodeTypes = {
   condition: ConditionNode,
   action: ActionNode,
   delay: DelayNode,
-  tag: TagNode,
+  set_attribute: AttributeNode,
+  tag: AttributeNode,
+  wait_for_reply: WaitReplyNode,
+  webhook: WebhookNode,
 };
 
 const startNodes: Node[] = [
@@ -175,8 +216,8 @@ const startNodes: Node[] = [
   },
   {
     id: "tag1",
-    type: "tag",
-    data: { label: "Tag: human", description: "Mark conversation for human follow-up" },
+    type: "set_attribute",
+    data: { label: "Set attribute", key: "tag", value: "human_handoff", description: "Mark conversation for human follow-up" },
     position: { x: 300, y: 650 },
   },
   {
@@ -292,15 +333,44 @@ export default function NexIAFlowBuilder() {
       return num; // seconds
     };
 
-    const parseTagValue = (node: RFNode) => {
-      const l = String(node.data?.label || "");
-      const d = String(node.data?.description || "");
-      let v = l.replace(/^Tag:\s*/i, "").trim();
-      if (!v && /tag[:\s]/i.test(d)) {
-        const m = d.match(/tag[:\s]*([\w-]+)/i);
-        if (m) v = m[1];
+    const parseAttributeKV = (node: RFNode) => {
+      const rawKey = (node.data?.key ?? "").toString().trim();
+      let key = rawKey || "tag";
+      const rawValue = node.data?.value;
+      let value = typeof rawValue === "string" ? rawValue.trim() : undefined;
+      if (!value) {
+        const l = String(node.data?.label || "");
+        const d = String(node.data?.description || "");
+        value = l.replace(/^Tag:\s*/i, "").trim();
+        if (!value && /tag[:\s]/i.test(d)) {
+          const m = d.match(/tag[:\s]*([\w-]+)/i);
+          if (m) value = m[1];
+        }
       }
-      return v || "tagged";
+      return { key, value: value || "tagged" };
+    };
+
+    const parseWaitSeconds = (node: RFNode) => {
+      const raw = node.data?.seconds;
+      if (raw === 0 || raw === "0") return 0;
+      if (raw !== undefined && raw !== null && raw !== "") {
+        const num = Number(raw);
+        if (Number.isFinite(num) && num >= 0) return Math.round(num);
+      }
+      return parseDelaySeconds(node);
+    };
+
+    const parseWebhookPayload = (node: RFNode) => {
+      const raw = node.data?.payload;
+      if (raw && typeof raw === "object") return raw;
+      if (typeof raw === "string" && raw.trim()) {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return undefined;
+        }
+      }
+      return undefined;
     };
 
     const collectLinear = (fromId: string, guard: Set<string>): any[] => {
@@ -326,8 +396,35 @@ export default function NexIAFlowBuilder() {
           curId = outs[0]?.target;
           continue;
         }
-        if (node.type === "tag") {
-          steps.push({ type: "set_attribute", key: "tag", value: parseTagValue(node) });
+        if (node.type === "set_attribute" || node.type === "tag") {
+          const { key, value } = parseAttributeKV(node);
+          steps.push({ type: "set_attribute", key, value });
+          curId = outs[0]?.target;
+          continue;
+        }
+
+        if (node.type === "wait_for_reply") {
+          const waitStep: Record<string, unknown> = { type: "wait_for_reply" };
+          const pattern = (node.data?.pattern ?? "").toString().trim();
+          if (pattern) waitStep.pattern = pattern;
+          const seconds = parseWaitSeconds(node);
+          if (Number.isFinite(seconds) && seconds > 0) waitStep.seconds = seconds;
+          const timeoutPath = (node.data?.timeoutPath ?? node.data?.timeout_path ?? "").toString().trim();
+          if (timeoutPath) waitStep.timeout_path = timeoutPath;
+          steps.push(waitStep);
+          curId = outs[0]?.target;
+          continue;
+        }
+
+        if (node.type === "webhook") {
+          const payload = parseWebhookPayload(node);
+          const data: Record<string, unknown> = {};
+          const url = (node.data?.url ?? "").toString().trim();
+          if (url) data.url = url;
+          if (payload !== undefined) data.payload = payload;
+          const meta = node.data?.metadata;
+          if (meta && typeof meta === "object") data.metadata = meta;
+          steps.push({ type: "action", action: "webhook", data });
           curId = outs[0]?.target;
           continue;
         }
@@ -407,6 +504,14 @@ export default function NexIAFlowBuilder() {
     setToken(t);
   }, []);
 
+  const applySelectedPatch = useCallback((patch: Record<string, unknown>) => {
+    if (!selected) return;
+    setNodes((nds) =>
+      nds.map((n) => (n.id === selected.id ? { ...n, data: { ...n.data, ...patch } } : n))
+    );
+    setSelected((prev) => (prev ? { ...prev, data: { ...(prev.data as any), ...patch } } : prev));
+  }, [selected, setNodes]);
+
   const onPublish = async () => {
     if (!token) {
       setToast({ msg: "Inicia sesión para publicar", type: "error" });
@@ -426,6 +531,16 @@ export default function NexIAFlowBuilder() {
       setPublishing(false);
     }
   };
+
+  const selectedData = selected?.data as any;
+  const webhookPayloadValue =
+    selected?.type === "webhook"
+      ? typeof selectedData?.payload === "string"
+        ? selectedData.payload
+        : selectedData?.payload
+        ? JSON.stringify(selectedData.payload, null, 2)
+        : ""
+      : "";
 
   return (
     <div className="h-[80vh] w-full bg-slate-100 text-slate-900 rounded-xl overflow-hidden border">
@@ -458,7 +573,9 @@ export default function NexIAFlowBuilder() {
             <PaletteItem type="condition" label="Condition" icon={<GitBranch size={16} />} />
             <PaletteItem type="action" label="Action" icon={<Settings2 size={16} />} />
             <PaletteItem type="delay" label="Delay" icon={<Clock3 size={16} />} />
-            <PaletteItem type="tag" label="Tag" icon={<TagIcon size={16} />} />
+            <PaletteItem type="set_attribute" label="Set Attribute" icon={<TagIcon size={16} />} />
+            <PaletteItem type="wait_for_reply" label="Wait for Reply" icon={<TimerReset size={16} />} />
+            <PaletteItem type="webhook" label="Webhook" icon={<SatelliteDish size={16} />} />
           </div>
 
           <div className="pt-4 text-xs text-slate-500 space-y-1">
@@ -502,8 +619,7 @@ export default function NexIAFlowBuilder() {
                   value={(selected.data as any)?.label || ""}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setNodes((nds) => nds.map((n) => (n.id === selected.id ? { ...n, data: { ...n.data, label: v } } : n)));
-                    setSelected((prev) => (prev ? { ...prev, data: { ...(prev.data as any), label: v } } : prev));
+                    applySelectedPatch({ label: v });
                   }}
                 />
               </div>
@@ -515,12 +631,81 @@ export default function NexIAFlowBuilder() {
                   value={(selected.data as any)?.description || ""}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setNodes((nds) => nds.map((n) => (n.id === selected.id ? { ...n, data: { ...n.data, description: v } } : n)));
-                    setSelected((prev) => (prev ? { ...prev, data: { ...(prev.data as any), description: v } } : prev));
+                    applySelectedPatch({ description: v });
                   }}
                 />
               </div>
+              {(selected.type === "set_attribute" || selected.type === "tag") && (
+                <div className="grid gap-2">
+                  <label className="text-xs text-slate-600">Attribute Key</label>
+                  <input
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm"
+                    value={(selectedData?.key as string) ?? ''}
+                    onChange={(e) => applySelectedPatch({ key: e.target.value })}
+                  />
+                  <label className="text-xs text-slate-600">Attribute Value</label>
+                  <input
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm"
+                    value={(selectedData?.value as string) ?? ''}
+                    onChange={(e) => applySelectedPatch({ value: e.target.value })}
+                  />
+                </div>
+              )}
+              {selected.type === "wait_for_reply" && (
+                <div className="grid gap-2">
+                  <label className="text-xs text-slate-600">Pattern (opcional)</label>
+                  <input
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm"
+                    value={(selectedData?.pattern as string) ?? ''}
+                    onChange={(e) => applySelectedPatch({ pattern: e.target.value })}
+                    placeholder="^hola"
+                  />
+                  <label className="text-xs text-slate-600">Timeout (segundos)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm"
+                    value={selectedData?.seconds ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (!raw) {
+                        applySelectedPatch({ seconds: undefined });
+                        return;
+                      }
+                      const num = Number(raw);
+                      if (Number.isFinite(num)) applySelectedPatch({ seconds: num });
+                    }}
+                  />
+                  <label className="text-xs text-slate-600">Timeout path (opcional)</label>
+                  <input
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm"
+                    value={(selectedData?.timeoutPath as string) ?? ''}
+                    onChange={(e) => applySelectedPatch({ timeoutPath: e.target.value })}
+                    placeholder="path_timeout"
+                  />
+                </div>
+              )}
+              {selected.type === "webhook" && (
+                <div className="grid gap-2">
+                  <label className="text-xs text-slate-600">Target URL</label>
+                  <input
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm"
+                    value={(selectedData?.url as string) ?? ''}
+                    onChange={(e) => applySelectedPatch({ url: e.target.value })}
+                    placeholder="https://example.com/webhook"
+                  />
+                  <label className="text-xs text-slate-600">Payload (JSON)</label>
+                  <textarea
+                    rows={6}
+                    className="px-3 py-2 rounded-lg border bg-white outline-none focus:ring-2 focus:ring-slate-300 text-sm font-mono"
+                    value={webhookPayloadValue}
+                    onChange={(e) => applySelectedPatch({ payload: e.target.value })}
+                  />
+                  <span className="text-[11px] text-slate-500">Se envia dentro del evento flow.webhook.</span>
+                </div>
+              )}
               <div className="flex gap-2">
+
                 <button
                   className="px-3 py-1.5 rounded-lg border bg-white hover:bg-slate-50 text-sm"
                   onClick={() => {
