@@ -501,6 +501,8 @@ class DevLoginBody(BaseModel):
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    default_workspace_id: str | None = None
+    workspaces: list[WorkspaceMembershipOut] | None = None
 
 
 def get_db():
@@ -538,14 +540,18 @@ def dev_login(body: DevLoginBody, db: Session = Depends(get_db)):
         user.role = body.role
         db.commit()
         db.refresh(user)
+    default_ws = None
     try:
-        _ensure_default_workspace_for_user(db, user)
+        default_ws = _ensure_default_workspace_for_user(db, user)
     except Exception:
-        pass
+        default_ws = None
+    memberships_raw = _workspace_memberships_payload(db, user.id)
+    memberships = [WorkspaceMembershipOut(**item) for item in memberships_raw]
+    default_workspace_id = default_ws.id if default_ws else (memberships_raw[0]["workspace_id"] if memberships_raw else None)
     now = int(time.time())
     exp = now + 7 * 24 * 3600
     token = _mint_jwt({"sub": user.id, "org_id": org.id, "email": user.email, "role": user.role, "iat": now, "exp": exp})
-    return {"access_token": token, "token_type": "bearer"}
+    return {"access_token": token, "token_type": "bearer", "default_workspace_id": default_workspace_id, "workspaces": memberships}
 
 
 from fastapi import Request
@@ -664,6 +670,20 @@ def _workspace_member_out(member: WorkspaceMember, user_row: User | None = None)
     }
 
 
+def _workspace_memberships_payload(db: Session, user_id: str) -> list[dict]:
+    rows = (
+        db.query(WorkspaceMember, Workspace)
+        .join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
+        .filter(WorkspaceMember.user_id == user_id)
+        .order_by(getattr(Workspace, "created_at", Workspace.id))
+        .all()
+    )
+    items: list[dict] = []
+    for member, ws in rows:
+        items.append({"workspace_id": ws.id, "workspace_name": ws.name, "role": member.role})
+    return items
+
+
 
 class WorkspaceCreate(BaseModel):
     name: str
@@ -700,6 +720,12 @@ class WorkspaceMemberOut(BaseModel):
     created_at: float | None = None
 
 
+class WorkspaceMembershipOut(BaseModel):
+    workspace_id: str
+    workspace_name: str
+    role: str
+
+
 # --- Auth real (MVP) --------------------------------------------------------
 
 class RegisterBody(BaseModel):
@@ -718,6 +744,8 @@ class TokenPair(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    default_workspace_id: str | None = None
+    workspaces: list[WorkspaceMembershipOut] | None = None
 
 
 def _hash_password(pw: str) -> str:
@@ -773,13 +801,17 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    default_ws = None
     try:
-        _ensure_default_workspace_for_user(db, user)
+        default_ws = _ensure_default_workspace_for_user(db, user)
     except Exception:
-        pass
+        default_ws = None
+    memberships_raw = _workspace_memberships_payload(db, user.id)
+    memberships = [WorkspaceMembershipOut(**item) for item in memberships_raw]
+    default_workspace_id = default_ws.id if default_ws else (memberships_raw[0]["workspace_id"] if memberships_raw else None)
     access = _mint_access(user)
     refresh = _mint_refresh(user, db)
-    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}
+    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer", "default_workspace_id": default_workspace_id, "workspaces": memberships}
 
 
 @app.post("/api/auth/login", response_model=TokenPair)
@@ -787,9 +819,17 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not _verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="invalid-credentials")
+    default_ws = None
+    try:
+        default_ws = _ensure_default_workspace_for_user(db, user)
+    except Exception:
+        default_ws = None
+    memberships_raw = _workspace_memberships_payload(db, user.id)
+    memberships = [WorkspaceMembershipOut(**item) for item in memberships_raw]
+    default_workspace_id = default_ws.id if default_ws else (memberships_raw[0]["workspace_id"] if memberships_raw else None)
     access = _mint_access(user)
     refresh = _mint_refresh(user, db)
-    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}
+    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer", "default_workspace_id": default_workspace_id, "workspaces": memberships}
 
 
 class RefreshBody(BaseModel):
@@ -807,9 +847,17 @@ def refresh_token(body: RefreshBody, db: Session = Depends(get_db)):
     # rotate
     rt.revoked = "true"
     db.commit()
+    default_ws = None
+    try:
+        default_ws = _ensure_default_workspace_for_user(db, user)
+    except Exception:
+        default_ws = None
+    memberships_raw = _workspace_memberships_payload(db, user.id)
+    memberships = [WorkspaceMembershipOut(**item) for item in memberships_raw]
+    default_workspace_id = default_ws.id if default_ws else (memberships_raw[0]["workspace_id"] if memberships_raw else None)
     access = _mint_access(user)
     new_refresh = _mint_refresh(user, db)
-    return {"access_token": access, "refresh_token": new_refresh, "token_type": "bearer"}
+    return {"access_token": access, "refresh_token": new_refresh, "token_type": "bearer", "default_workspace_id": default_workspace_id, "workspaces": memberships}
 
 
 class LogoutBody(BaseModel):
@@ -1876,6 +1924,15 @@ def webhooks_delete(wid: str, user: dict = require_roles(Role.admin)):
     return {"ok": True}
 # --- Workspaces --------------------------------------------------------------
 
+@app.get("/api/my/workspaces", response_model=list[WorkspaceMembershipOut])
+def list_my_workspaces(user: dict = Depends(current_user), db: Session = Depends(lambda: SessionLocal())):
+    user_id = str(user.get("sub")) if user else ""
+    if not user_id:
+        return []
+    memberships = _workspace_memberships_payload(db, user_id)
+    return [WorkspaceMembershipOut(**item) for item in memberships]
+
+
 @app.get("/api/workspaces", response_model=list[WorkspaceOut])
 def list_workspaces(user: dict = require_roles(Role.owner, Role.admin), db: Session = Depends(lambda: SessionLocal())):
     rows = (
@@ -2717,6 +2774,7 @@ def search_contacts(
             timezone=getattr(c, 'timezone', None),
         ))
     return out
+
 
 
 

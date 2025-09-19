@@ -2,6 +2,23 @@
 
 export type JWT = string;
 
+export type WorkspaceMembership = {
+  workspace_id: string;
+  workspace_name: string;
+  role: string;
+};
+
+export type TokenOutPayload = {
+  access_token: string;
+  token_type: string;
+  default_workspace_id?: string | null;
+  workspaces?: WorkspaceMembership[] | null;
+};
+
+export type TokenPairPayload = TokenOutPayload & {
+  refresh_token: string;
+};
+
 const base = ""; // same-origin proxy via Traefik
 
 async function apiFetch<T>(path: string, opts: RequestInit = {}, token?: JWT): Promise<T> {
@@ -26,7 +43,7 @@ async function safeJson(res: Response) {
 
 // --- Auth (dev) ---
 export async function devLogin(email: string, orgName: string, role: "admin" | "agent" = "admin") {
-  return apiFetch<{ access_token: string; token_type: string }>(
+  return apiFetch<TokenOutPayload>(
     "/api/auth/dev-login",
     { method: "POST", body: JSON.stringify({ email, org_name: orgName, role }) }
   );
@@ -38,21 +55,21 @@ export async function getMe(token: JWT) {
 
 // --- Auth real (register/login/refresh/logout) ---
 export async function authRegister(email: string, password: string, orgName: string, role: "admin" | "agent" = "admin") {
-  return apiFetch<{ access_token: string; refresh_token: string; token_type: string }>(
+  return apiFetch<TokenPairPayload>(
     "/api/auth/register",
     { method: "POST", body: JSON.stringify({ email, password, org_name: orgName, role }) }
   );
 }
 
 export async function authLogin(email: string, password: string) {
-  return apiFetch<{ access_token: string; refresh_token: string; token_type: string }>(
+  return apiFetch<TokenPairPayload>(
     "/api/auth/login",
     { method: "POST", body: JSON.stringify({ email, password }) }
   );
 }
 
 export async function authRefresh(refreshToken: string) {
-  return apiFetch<{ access_token: string; refresh_token: string; token_type: string }>(
+  return apiFetch<TokenPairPayload>(
     "/api/auth/refresh",
     { method: "POST", body: JSON.stringify({ refresh_token: refreshToken }) }
   );
@@ -491,4 +508,8 @@ export function subscribeInbox(
     try { ctrl.abort(); } catch {}
     if (onStatus) onStatus("stopped");
   };
+}
+
+export async function listMyWorkspaces(token: JWT) {
+  return apiFetch<WorkspaceMembership[]>("/api/my/workspaces", {}, token);
 }
