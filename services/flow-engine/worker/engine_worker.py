@@ -1,4 +1,5 @@
 import os, json, time, asyncio, logging, uuid, re
+import httpx
 from prometheus_client import Counter, start_http_server
 from pythonjsonlogger import json as jsonlogger
 from redis import Redis
@@ -26,6 +27,14 @@ except Exception:
     _SCHED_POLL_MS = 500
 _SCHED_ZSET = os.getenv("FLOW_ENGINE_SCHED_ZSET", "nf:incoming:scheduled")
 _WAIT_PREFIX = os.getenv("FLOW_ENGINE_WAIT_PREFIX", "fe:wait")
+
+_NLP_SERVICE_URL = os.getenv("NLP_SERVICE_URL", "http://nlp:8000").rstrip("/")
+try:
+    _NLP_TIMEOUT = float(os.getenv("NLP_TIMEOUT_SECONDS", "1.5"))
+except Exception:
+    _NLP_TIMEOUT = 1.5
+_INTENT_DEFAULT = os.getenv("NLP_FALLBACK_INTENT", "default")
+_INTENT_WARNED = False
 
 class _Noop:
     def inc(self, *args, **kwargs):
@@ -58,70 +67,103 @@ except Exception:
     DBContact = None  # type: ignore
 
 def parse_kvs(kvs):
-	"""Normalize redis XREAD key/value payloads into a dict of strings.
+    """Normalize redis XREAD key/value payloads into a dict of strings.
 
-	Accepts either a dict or a flat list (k, v, k, v, ...), with bytes or str values.
-	Returns a dict[str, str] or None on failure.
-	"""
-	try:
-		fields = {}
-		if isinstance(kvs, dict):
-			for k, v in kvs.items():
-				fields[str(k)] = str(v)
-		else:
-			for i in range(0, len(kvs), 2):
-				k = kvs[i].decode() if isinstance(kvs[i], bytes) else kvs[i]
-				v = kvs[i+1].decode() if isinstance(kvs[i+1], bytes) else kvs[i+1]
-				fields[str(k)] = str(v)
-		return fields
-	except Exception:
-		logger.exception("parse_kvs failed")
-		try:
-			ENGINE_ERRORS.inc()
-		except Exception:
-			pass
-		return None
+    Accepts either a dict or a flat list (k, v, k, v, ...), with bytes or str values.
+    Returns a dict[str, str] or None on failure.
+    """
+    try:
+        fields = {}
+        if isinstance(kvs, dict):
+            for k, v in kvs.items():
+                fields[str(k)] = str(v)
+        else:
+            for i in range(0, len(kvs), 2):
+                k = kvs[i].decode() if isinstance(kvs[i], bytes) else kvs[i]
+                v = kvs[i+1].decode() if isinstance(kvs[i+1], bytes) else kvs[i+1]
+                fields[str(k)] = str(v)
+        return fields
+    except Exception:
+        logger.exception("parse_kvs failed")
+        try:
+            ENGINE_ERRORS.inc()
+        except Exception:
+            pass
+        return None
 
-def classify_intent(text: str) -> str:
-	t = (text or "").lower()
-	if "precio" in t or "costo" in t or "precio" in t:
-		return "pricing"
-	if "hola" in t or "buenas" in t:
-		return "greeting"
-	return "default"
+def _fallback_intent(text: str) -> str:
+    t = (text or "").lower()
+    if "precio" in t or "costo" in t or "plan" in t or "tarifa" in t:
+        return "pricing"
+    if "hola" in t or "buenas" in t or "buenos" in t:
+        return "greeting"
+    if "soporte" in t or "ayuda" in t or "problema" in t or "error" in t:
+        return "support"
+    if "humano" in t or "asesor" in t or "agente" in t:
+        return "handoff"
+    return _INTENT_DEFAULT
+
+
+async def classify_intent(text: str) -> str:
+    message = (text or "").strip()
+    if not message:
+        return _INTENT_DEFAULT
+    if not _NLP_SERVICE_URL:
+        return _fallback_intent(message)
+
+    global _INTENT_WARNED
+    url = f"{_NLP_SERVICE_URL}/api/nlp/intents"
+    payload = {"text": message, "top_k": 1}
+    try:
+        async with httpx.AsyncClient(timeout=_NLP_TIMEOUT) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                primary = data.get("primary_intent") or data.get("top_intents", [{}])[0].get("label")
+                if isinstance(primary, str) and primary:
+                    return primary.strip().lower()
+            else:
+                if not _INTENT_WARNED:
+                    logger.warning("nlp service returned %s", resp.status_code)
+                    _INTENT_WARNED = True
+    except Exception:
+        if not _INTENT_WARNED:
+            logger.exception("nlp intent classification failed")
+            _INTENT_WARNED = True
+    return _fallback_intent(message)
 
 async def handle_message(msg_id: str, fields: dict) -> bool:
-	payload_raw = fields.get("payload") or fields.get("body") or ""
-	try:
-		payload = json.loads(payload_raw)
-	except Exception:
-		payload = {"text": payload_raw}
-	# try to extract text from common WA structure
-	text = ""
-	# also try to extract contact phone (for replies)
-	contact_phone = None
-	# Common webhook path: entry->[0]->changes->[0]->value->messages->[0]->text->body
-	try:
-		entry = payload.get("entry", [])
-		if entry:
-			changes = entry[0].get("changes", [])
-			if changes:
-				value = changes[0].get("value", {})
-				messages = value.get("messages", [])
-				if messages:
-					m0 = messages[0]
-					text = m0.get("text", {}).get("body", "")
-					# for WhatsApp Cloud incoming, the sender's phone is in `from`
-					contact_phone = m0.get("from") or contact_phone
-				# also check value.contacts[0].wa_id if present
-				contacts = value.get("contacts", [])
-				if contacts:
-					contact_phone = contacts[0].get("wa_id") or contact_phone
-	except Exception:
-		pass
-	if not text:
-		# fallback to a top-level text
-		text = payload.get("text") or payload.get("message") or ""
+    payload_raw = fields.get("payload") or fields.get("body") or ""
+    try:
+        payload = json.loads(payload_raw)
+    except Exception:
+        payload = {"text": payload_raw}
+    # try to extract text from common WA structure
+    text = ""
+    # also try to extract contact phone (for replies)
+    contact_phone = None
+    # Common webhook path: entry->[0]->changes->[0]->value->messages->[0]->text->body
+    try:
+        entry = payload.get("entry", [])
+        if entry:
+            changes = entry[0].get("changes", [])
+            if changes:
+                value = changes[0].get("value", {})
+                messages = value.get("messages", [])
+                if messages:
+                    m0 = messages[0]
+                    text = m0.get("text", {}).get("body", "")
+                    # for WhatsApp Cloud incoming, the sender's phone is in `from`
+                    contact_phone = m0.get("from") or contact_phone
+                # also check value.contacts[0].wa_id if present
+                contacts = value.get("contacts", [])
+                if contacts:
+                    contact_phone = contacts[0].get("wa_id") or contact_phone
+    except Exception:
+        pass
+    if not text:
+        # fallback to a top-level text
+        text = payload.get("text") or payload.get("message") or ""
 
     # If there's a waiting rule for this contact, check match and optionally resume
     org_id = fields.get("org_id")
@@ -167,70 +209,72 @@ async def handle_message(msg_id: str, fields: dict) -> bool:
     published = False
     try:
         outs = await _run_flow_minimal(text=text, contact_phone=contact_phone, fields=fields, payload=payload)
-		for out in outs:
-			# ensure minimal enrichment
-			if fields.get("org_id"):
-				out["org_id"] = fields.get("org_id")
-			trace_id = out.get("trace_id") or str(uuid.uuid4())
-			out["trace_id"] = trace_id
-			redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
-			try:
-				ENGINE_PUBLISHED.inc()
-			except Exception:
-				pass
-			logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
-			published = True
-	except Exception:
-		logger.exception("flow execution failed")
-		try:
-			ENGINE_ERRORS.inc()
-		except Exception:
-			pass
+        for out in outs:
+            # ensure minimal enrichment
+            if fields.get("org_id"):
+                out["org_id"] = fields.get("org_id")
+            trace_id = out.get("trace_id") or str(uuid.uuid4())
+            out["trace_id"] = trace_id
+            redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
+            try:
+                ENGINE_PUBLISHED.inc()
+            except Exception:
+                pass
+            logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
+            published = True
+    except Exception:
+        logger.exception("flow execution failed")
+        try:
+            ENGINE_ERRORS.inc()
+        except Exception:
+            pass
 
     if not published:
-        intent = classify_intent(text)
-		# simple action: reply with a template based on intent
-		if intent == "pricing":
-			reply = f"Gracias por preguntar sobre precios. Nuestro plan starter cuesta $9/mes."
-		elif intent == "greeting":
-			reply = "Hola! ¿En qué puedo ayudarte hoy?"
-		else:
-			reply = "Gracias por tu mensaje. Un agente te responderá pronto."
+        intent = await classify_intent(text)
+        # simple action: reply with a template based on intent
+        if intent == "pricing":
+            reply = "Gracias por preguntar sobre precios. Nuestro plan starter cuesta $9/mes."
+        elif intent == "greeting":
+            reply = "Hola! ¿En qué puedo ayudarte hoy?"
+        elif intent == "support":
+            reply = "Veo que necesitas ayuda. Un agente se pondrá en contacto contigo en breve."
+        else:
+            reply = "Gracias por tu mensaje. Un agente te responderá pronto."
 
-		# publish to outbox (so messaging-gateway will pick it)
-		# include org_id/channel_id when provided by upstream (webhook enrichment)
-		try:
-			trace_id = str(uuid.uuid4())
-			channel = fields.get("channel_id") or "wa_main"
-			to_phone = contact_phone or payload.get("contact", {}).get("phone", "unknown")
-			out = {
-				"channel_id": channel,
-				"to": to_phone,
-				"type": "text",
-				"text": reply,
-				"client_id": f"auto_{int(time.time()*1000)}",
-				"orig_text": text,
-				"trace_id": trace_id,
-			}
-			if fields.get("org_id"):
-				out["org_id"] = fields.get("org_id")
-			# ensure all values are strings for redis stream
-			redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
-			try:
-				ENGINE_PUBLISHED.inc()
-			except Exception:
-				pass
-			# log the published message with trace_id for observability
-			logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
-		except Exception:
-			logger.exception("engine xadd failed")
-			try:
-				ENGINE_ERRORS.inc()
-			except Exception:
-				pass
-			return False
-		return True
-	return True
+        # publish to outbox (so messaging-gateway will pick it)
+        # include org_id/channel_id when provided by upstream (webhook enrichment)
+        try:
+            trace_id = str(uuid.uuid4())
+            channel = fields.get("channel_id") or "wa_main"
+            to_phone = contact_phone or payload.get("contact", {}).get("phone", "unknown")
+            out = {
+                "channel_id": channel,
+                "to": to_phone,
+                "type": "text",
+                "text": reply,
+                "client_id": f"auto_{int(time.time()*1000)}",
+                "orig_text": text,
+                "trace_id": trace_id,
+            }
+            if fields.get("org_id"):
+                out["org_id"] = fields.get("org_id")
+            # ensure all values are strings for redis stream
+            redis.xadd("nf:outbox", {k: str(v) for k, v in out.items()})
+            try:
+                ENGINE_PUBLISHED.inc()
+            except Exception:
+                pass
+            # log the published message with trace_id for observability
+            logger.info("published nf:outbox message", extra={"trace_id": trace_id, "to": out.get("to"), "client_id": out.get("client_id")})
+        except Exception:
+            logger.exception("engine xadd failed")
+            try:
+                ENGINE_ERRORS.inc()
+            except Exception:
+                pass
+            return False
+        return True
+    return True
 
 async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, payload: dict) -> list[dict]:
     """Execute a very small subset of a flow definition if available.
@@ -238,7 +282,7 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
     Strategy:
     - Look up latest active flow for org_id (if org_id present).
     - Find first node with type "intent" and a "map" dict.
-    - Map classify_intent(text) -> path name; default to "default" or first key.
+    - Map await classify_intent(text) -> path name; default to "default" or first key.
     - Execute first step of that path if it's an action of type send_*.
     - Return list of 0..N outbox messages to publish.
     """
@@ -278,12 +322,12 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
     except Exception:
         resume = None
 
+    intent_label = await classify_intent(text)
     path_key = None
     if resume and resume.get("path"):
         path_key = resume.get("path")
     elif mapping:
-        it = classify_intent(text)
-        path_key = mapping.get(it) or mapping.get("default")
+        path_key = mapping.get(intent_label) or mapping.get("default")
     # Fallback: try a well-known path
     if not path_key:
         path_key = "path_default"
@@ -437,7 +481,7 @@ async def _run_flow_minimal(text: str, contact_phone: str | None, fields: dict, 
                 flow_id=getattr(row, 'id', None),
                 status='completed' if outputs else 'running',
                 last_step=str(path_key),
-                context={"intent": classify_intent(text)},
+                context={"intent": intent_label or _INTENT_DEFAULT},
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )

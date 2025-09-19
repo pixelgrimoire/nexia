@@ -103,6 +103,7 @@ services:
     command: ["python", "-m", "worker.engine_worker"]
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - NLP_SERVICE_URL=http://nlp:8000
     depends_on:
       - redis
 
@@ -121,6 +122,17 @@ services:
     build:
       context: .
       dockerfile: services/analytics/Dockerfile
+
+  nlp:
+    build:
+      context: .
+      dockerfile: services/nlp/Dockerfile
+    environment:
+      - NLP_MIN_SCORE=0.32
+    ports:
+      - "8004:8000"
+    restart: unless-stopped
+
 
   minio:
     image: minio/minio:RELEASE.2024-09-22T00-33-43Z
@@ -147,3 +159,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  miniodata:

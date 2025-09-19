@@ -459,7 +459,7 @@ async def send_message(body: SendMessage, user: dict = require_roles(Role.admin,
 
 # SSE inbox stream using sse-starlette-style EventSourceResponse
 @app.get("/api/inbox/stream")
-async def inbox_stream(request: Request, user: dict = require_roles(Role.admin, Role.agent)):
+async def inbox_stream(request: Request, user: dict = require_roles(Role.owner, Role.admin, Role.agent, Role.analyst)):
 	async def event_gen():
 		last_id = "$"
 		while True:

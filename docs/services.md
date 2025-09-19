@@ -8,5 +8,6 @@ Listado y responsabilidades de cada servicio en `./services`.
 - flow-engine: ejecuta flujos desde `nf:incoming` y encola respuestas.
 - contacts: CRUD de contactos.
 - analytics: endpoints de métricas.
+- nlp: clasificación de intención y extracción básica para IA responsable.
 
 Cada servicio tiene un `Dockerfile` y `requirements.txt` (Python) o `package.json` (frontend).

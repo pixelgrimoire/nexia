@@ -13,6 +13,7 @@ Variables de entorno:
 - `FLOW_ENGINE_MAX_RETRIES` (por defecto `2`)
 - `FLOW_ENGINE_SCHED_POLL_MS` (por defecto `500`) — intervalo de poll del scheduler.
 - `FLOW_ENGINE_SCHED_ZSET` (por defecto `nf:incoming:scheduled`) — zset de tareas diferidas.
+- `NLP_SERVICE_URL` (por defecto `http://nlp:8000`) y `NLP_TIMEOUT_SECONDS` (1.5s): endpoint y timeout del clasificador de intención.
 
 Persistencia (MVP):
 - Se crea la tabla `flow_runs` para registrar ejecuciones de flujos con campos: `id`, `org_id`, `flow_id`, `status`, `last_step`, `context`, `created_at`, `updated_at`.
@@ -27,7 +28,7 @@ python worker/engine_worker.py
 Notas (MVP):
 - El worker usa `XGROUP/XREADGROUP` con `ACK` para procesar `nf:incoming`.
 - Reintentos automáticos hasta `FLOW_ENGINE_MAX_RETRIES`; al exceder, envía a `nf:incoming:dlq`.
-- Si hay un Flow activo (`flows.status == 'active'`) para el `org_id` del evento entrante, ejecuta un subconjunto del grafo: un nodo `intent` con `map` y varios pasos `action` consecutivos del path (`send_text`, `send_template`, `send_media`). Si no hay flujo, responde con heurística simple (saludo/precio/default).
+- Si hay un Flow activo (`flows.status == 'active'`) para el `org_id` del evento entrante, ejecuta un subconjunto del grafo: un nodo `intent` con `map` y varios pasos `action` consecutivos del path (`send_text`, `send_template`, `send_media`). La clasificación de intención se delega al servicio `nlp` (`NLP_SERVICE_URL`) con `fallback` heurístico cuando no está disponible.
 - Pasos adicionales soportados:
   - `set_attribute` (actualiza `contact.attributes[key] = value` si el contacto es localizable por `wa_id/phone`).
   - `action: "webhook"` (publica un evento `flow.webhook` en `nf:webhooks` con `data` del paso y contexto básico; el dispatcher entrega a endpoints configurados que incluyan ese tipo de evento).

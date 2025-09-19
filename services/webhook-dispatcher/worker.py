@@ -1,7 +1,10 @@
 import os, json, asyncio, time, hmac, hashlib, logging
 import httpx
 from redis import Redis
-from pythonjsonlogger import json as jsonlogger
+try:
+    from pythonjsonlogger import jsonlogger
+except ImportError:
+    jsonlogger = None
 
 redis = Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
 
@@ -10,8 +13,10 @@ CONSUMER_NAME = os.getenv("WH_CONSUMER", None) or os.getenv("HOSTNAME", "wh-1")
 MAX_RETRIES = int(os.getenv("WH_MAX_RETRIES", "3"))
 
 handler = logging.StreamHandler()
-formatter = jsonlogger.JsonFormatter('%(asctime)s %(name)s %(levelname)s %(message)s')
-handler.setFormatter(formatter)
+if jsonlogger is not None:
+    handler.setFormatter(jsonlogger.JsonFormatter('%(asctime)s %(name)s %(levelname)s %(message)s'))
+else:
+    handler.setFormatter(logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s'))
 logger = logging.getLogger("webhook_dispatcher")
 logger.addHandler(handler)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))

@@ -445,6 +445,11 @@ export function subscribeInbox(
       try {
         if (onStatus) onStatus("connecting");
         const res = await fetch("/api/inbox/stream", { headers, signal: ctrl.signal });
+        if (res.status === 401 || res.status === 403) {
+          if (onStatus) onStatus("stopped");
+          stopped = true;
+          break;
+        }
         if (!res.body) throw new Error("no-body");
         const reader = res.body.getReader();
         const decoder = new TextDecoder();

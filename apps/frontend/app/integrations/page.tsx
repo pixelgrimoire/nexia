@@ -38,8 +38,8 @@ export default function IntegrationsPage() {
         fetch('/api/integrations/webhooks/events?kind=delivered&limit=50').then(r => r.json()).catch(() => []),
         fetch('/api/integrations/webhooks/events?kind=dlq&limit=50').then(r => r.json()).catch(() => []),
       ]);
-      setEvents(deliv as any);
-      setDlq(dead as any);
+      setEvents(Array.isArray(deliv) ? deliv : Array.isArray(deliv?.items) ? deliv.items : []);
+      setDlq(Array.isArray(dead) ? dead : Array.isArray(dead?.items) ? dead.items : []);
       try {
         const m = await fetch('/api/integrations/metrics').then(r => r.json());
         setMetrics(m);

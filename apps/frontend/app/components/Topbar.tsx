@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { authLogout, getMe, listConversations, subscribeInbox, type JWT } from "../lib/api";
 import { clearTokens, getAccessToken, getRefreshToken } from "../lib/auth";
 import Link from "next/link";
@@ -19,39 +19,87 @@ export default function Topbar() {
   const dotRef = useRef<HTMLSpanElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevStatusRef = useRef<"connecting" | "connected" | "reconnecting" | "stopped">("stopped");
+  const settingsRef = useRef<HTMLDivElement | null>(null);
+  const stopSubscriptionRef = useRef<(() => void) | null>(null);
   const [toast, setToast] = useState<{ msg: string; type?: "info" | "success" | "error" } | null>(null);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const fetchUnread = useCallback((token: JWT) => {
+    listConversations(token, { include_unread: true, limit: 200 })
+      .then((rows) => setUnread(rows.reduce((acc: number, r: any) => acc + (r.unread || 0), 0)))
+      .catch(() => {});
+  }, []);
   const dotColor = sseStatus === "connected" ? "bg-emerald-500" : sseStatus === "reconnecting" ? "bg-amber-500" : sseStatus === "connecting" ? "bg-slate-400" : "bg-slate-300";
 
   useEffect(() => {
-    const t = getAccessToken();
-    if (!t) return;
-    getMe(t as JWT)
+    const token = getAccessToken() as JWT | null;
+    if (!token) return;
+
+    let cancelled = false;
+
+    getMe(token)
       .then((u) => {
+        if (cancelled) return;
         setEmail(String((u as any)?.email || ""));
         const r = String((u as any)?.role || "");
-        if (r === "owner" || r === "admin" || r === "agent" || r === "analyst") setRole(r as any);
+        if (r === "owner" || r === "admin" || r === "agent" || r === "analyst") {
+          setRole(r as any);
+          if (r === "owner" || r === "admin" || r === "agent") fetchUnread(token);
+        }
       })
-      .catch(() => setEmail(null));
-    
-    const fetchUnread = () => {
-        listConversations(t as JWT, { include_unread: true, limit: 200 })
-        .then((rows) => setUnread(rows.reduce((acc: number, r: any) => acc + (r.unread || 0), 0)))
-        .catch(() => {});
-    };
-
-    fetchUnread();
-
-    const stop = subscribeInbox(t as JWT, () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(fetchUnread, 400);
-    }, (s) => setSseStatus(s));
+      .catch(() => {
+        if (!cancelled) setEmail(null);
+      });
 
     return () => {
-      if (stop) stop();
-      setSseStatus("stopped");
-      if (timerRef.current) clearTimeout(timerRef.current);
+      cancelled = true;
     };
-  }, []);
+  }, [fetchUnread]);
+
+  useEffect(() => {
+    const token = getAccessToken() as JWT | null;
+    if (!token) return;
+
+    const allowedInbox = role === "admin" || role === "agent" || role === "owner";
+
+    if (!allowedInbox) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (stopSubscriptionRef.current) {
+        stopSubscriptionRef.current();
+        stopSubscriptionRef.current = null;
+      }
+      setSseStatus("stopped");
+      return;
+    }
+
+    if (stopSubscriptionRef.current) {
+      stopSubscriptionRef.current();
+      stopSubscriptionRef.current = null;
+    }
+
+    const stop = subscribeInbox(
+      token,
+      () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => fetchUnread(token), 400);
+      },
+      (s) => setSseStatus(s)
+    );
+    stopSubscriptionRef.current = stop;
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (stopSubscriptionRef.current) {
+        stopSubscriptionRef.current();
+        stopSubscriptionRef.current = null;
+      }
+    };
+  }, [role, fetchUnread]);
 
   const pathname = usePathname();
   const isActive = (href: string) => {
@@ -81,6 +129,23 @@ export default function Topbar() {
     }
     prevStatusRef.current = sseStatus;
   }, [sseStatus]);
+
+  useEffect(() => {
+    const handleClick = (ev: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(ev.target as Node)) {
+        setShowSettingsMenu(false);
+      }
+    };
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setShowSettingsMenu(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, []);
 
   const onLogout = async () => {
     setLoading(true);
@@ -149,12 +214,26 @@ export default function Topbar() {
         {email ? (
             <div className="flex items-center gap-3">
                  {(role === "admin" || role === "owner") && (
-                     <div className="group relative">
-                        <button className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-200 transition-colors">
+                     <div
+                        className="relative"
+                        onMouseEnter={() => setShowSettingsMenu(true)}
+                        onMouseLeave={() => setShowSettingsMenu(false)}
+                        ref={settingsRef}
+                      >
+                        <button
+                          type="button"
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-200 transition-colors"
+                          aria-haspopup="true"
+                          aria-expanded={showSettingsMenu}
+                          onClick={() => setShowSettingsMenu((prev) => !prev)}
+                        >
                             <Settings size={18}/>
                             <span>Configuración</span>
                         </button>
-                        <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto">
+                        <div
+                          className={`absolute right-0 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 transition-opacity ${showSettingsMenu ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+                          role="menu"
+                        >
                             {settingsItems.map(item => (
                                 <Link key={item.href} href={item.href} className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100">{item.label}</Link>
                             ))}

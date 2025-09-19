@@ -12,6 +12,7 @@ Archivos principales:
 - `runbooks.md` — runbooks y resolución de incidentes
 - `service-*` — documentación por servicio
 - `service-api-gateway-utf8.md` — API Gateway (versión UTF‑8 actualizada)
+- `service-nlp.md` — NLP (intents & extractores)
 - `security.md` — seguridad
 - `roadmap.md` — roadmap
 
