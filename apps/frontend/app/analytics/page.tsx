@@ -61,6 +61,10 @@ export default function AnalyticsPage() {
 
   const maxCount = useMemo(() => series.reduce((m, p) => Math.max(m, p.count), 0) || 1, [series]);
 
+  const avgMessagesPerConversation = kpis?.avg_messages_per_conversation != null ? kpis.avg_messages_per_conversation.toFixed(1) : '—';
+  const flowCompletionRate = kpis?.flow_completion_rate != null ? `${Math.round(kpis.flow_completion_rate * 100)}%` : '—';
+  const flowRunsSummary = kpis?.flow_runs_total ? `${kpis.flow_runs_completed}/${kpis.flow_runs_total}` : `${kpis?.flow_runs_completed ?? 0}`;
+
   return (
     <main className="space-y-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
@@ -89,11 +93,16 @@ export default function AnalyticsPage() {
           {kpis && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               <StatCard title="Mensajes Totales" value={kpis.total_messages} />
-              <StatCard title="Conversaciones Únicas" value={kpis.unique_conversations} />
-              <StatCard title="Entrantes" value={kpis.inbound_messages} />
-              <StatCard title="Salientes" value={kpis.outbound_messages} />
-              <StatCard title="Tiempo 1ª Resp. (s)" value={kpis.avg_first_response_seconds != null ? Math.round(kpis.avg_first_response_seconds) : '—'} />
+              <StatCard title="Mensajes Entrantes" value={kpis.inbound_messages} />
+              <StatCard title="Mensajes Salientes" value={kpis.outbound_messages} />
+              <StatCard title="Nuevas Conversaciones" value={kpis.new_conversations} />
+              <StatCard title="Conversaciones Unicas" value={kpis.unique_conversations} />
+              <StatCard title="Conversaciones Abiertas" value={kpis.open_conversations} />
+              <StatCard title="Mensajes por Conversacion" value={avgMessagesPerConversation} />
+              <StatCard title="Tiempo 1a Resp. (s)" value={kpis.avg_first_response_seconds != null ? Math.round(kpis.avg_first_response_seconds) : '—'} />
               <StatCard title="Tasa de respuesta" value={kpis.response_rate != null ? `${Math.round(kpis.response_rate * 100)}%` : '—'} />
+              <StatCard title="Flujos Completados" value={flowRunsSummary} />
+              <StatCard title="Flow Completion" value={kpis.flow_runs_total > 0 ? flowCompletionRate : '—'} />
             </div>
           )}
 

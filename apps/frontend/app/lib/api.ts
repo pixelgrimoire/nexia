@@ -257,8 +257,14 @@ export type KpiResponse = {
   inbound_messages: number;
   outbound_messages: number;
   unique_conversations: number;
+  new_conversations: number;
+  open_conversations: number;
+  avg_messages_per_conversation: number | null;
   avg_first_response_seconds: number | null;
   response_rate: number | null;
+  flow_runs_total: number;
+  flow_runs_completed: number;
+  flow_completion_rate: number | null;
   start_date?: string | null;
   end_date?: string | null;
 };

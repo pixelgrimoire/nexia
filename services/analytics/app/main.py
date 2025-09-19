@@ -70,8 +70,43 @@ def get_kpis(params: KPIParams = Depends(), db: Session = Depends(get_db)):
     except Exception:
         total = inbound = outbound = uniq_conv = 0
 
+    # Derived metrics for conversations and flows
+    new_conversations = 0
+    try:
+        first_where = _where_range("first_created", has_start, has_end)
+        first_sql = text("""
+            WITH first_messages AS (
+              SELECT conversation_id, MIN(created_at) AS first_created
+              FROM messages
+              WHERE created_at IS NOT NULL
+              GROUP BY conversation_id
+            )
+            SELECT COUNT(*) FROM first_messages WHERE 1=1""" + first_where)
+        new_conversations = db.execute(first_sql, binds).scalar() or 0
+    except Exception:
+        new_conversations = 0
+
+    open_conversations = 0
+    try:
+        open_conversations = db.execute(text("SELECT COUNT(*) FROM conversations WHERE state='open'"), {}).scalar() or 0
+    except Exception:
+        open_conversations = 0
+
+    flow_runs_total = 0
+    flow_runs_completed = 0
+    try:
+        flow_where = _where_range("created_at", has_start, has_end)
+        flow_runs_total = db.execute(text(f"SELECT COUNT(*) FROM flow_runs WHERE 1=1{flow_where}"), binds).scalar() or 0
+        flow_runs_completed = db.execute(text(f"SELECT COUNT(*) FROM flow_runs WHERE status='completed'{flow_where}"), binds).scalar() or 0
+    except Exception:
+        flow_runs_total = flow_runs_completed = 0
+
     avg_resp_sec = None
     resp_rate = None
+
+    avg_messages_per_conversation = (float(total) / float(uniq_conv)) if uniq_conv else None
+    flow_completion_rate = (float(flow_runs_completed) / float(flow_runs_total)) if flow_runs_total else None
+
     try:
         dialect = str(getattr(db.bind.dialect, "name", "")) if getattr(db, "bind", None) else ""
         range_pred = _where_range("m.created_at", has_start, has_end)
@@ -139,8 +174,14 @@ def get_kpis(params: KPIParams = Depends(), db: Session = Depends(get_db)):
         "inbound_messages": int(inbound),
         "outbound_messages": int(outbound),
         "unique_conversations": int(uniq_conv),
+        "new_conversations": int(new_conversations),
+        "open_conversations": int(open_conversations),
+        "avg_messages_per_conversation": avg_messages_per_conversation,
         "avg_first_response_seconds": avg_resp_sec,
         "response_rate": resp_rate,
+        "flow_runs_total": int(flow_runs_total),
+        "flow_runs_completed": int(flow_runs_completed),
+        "flow_completion_rate": flow_completion_rate,
         "start_date": params.start_date,
         "end_date": params.end_date,
     }

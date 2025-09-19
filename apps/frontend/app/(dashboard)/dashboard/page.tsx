@@ -93,7 +93,10 @@ export default function DashboardPage() {
     })();
   }, []);
 
-  const openConversations = conversations.filter(c => c.state === 'open').length;
+  const openConversations = kpis?.open_conversations ?? conversations.filter((c) => c.state === 'open').length;
+  const avgMessagesPerConversation = kpis?.avg_messages_per_conversation != null ? kpis.avg_messages_per_conversation.toFixed(1) : '—';
+  const flowCompletionRate =
+    kpis?.flow_completion_rate != null ? `${Math.round(kpis.flow_completion_rate * 100)}%` : '—';
 
   const triggerDownload = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -161,7 +164,22 @@ export default function DashboardPage() {
           {kpis && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               <StatCard
-                title="Tiempo 1ª Respuesta (s)"
+                title="Nuevas Conversaciones"
+                value={kpis.new_conversations}
+                icon={<PlusCircle className="text-slate-500" />}
+              />
+              <StatCard
+                title="Mensajes Totales"
+                value={kpis.total_messages}
+                icon={<MessageSquare className="text-slate-500" />}
+              />
+              <StatCard
+                title="Mensajes por Conversacion"
+                value={avgMessagesPerConversation}
+                icon={<MessageSquare className="text-slate-500" />}
+              />
+              <StatCard
+                title="Tiempo 1a Respuesta (s)"
                 value={kpis.avg_first_response_seconds != null ? Math.round(kpis.avg_first_response_seconds) : '—'}
                 icon={<MessageSquare className="text-slate-500" />}
               />
@@ -171,8 +189,13 @@ export default function DashboardPage() {
                 icon={<Users className="text-slate-500" />}
               />
               <StatCard
-                title="Mensajes Totales"
-                value={kpis.total_messages}
+                title="Flujos Completados"
+                value={kpis.flow_runs_total > 0 ? `${kpis.flow_runs_completed}/${kpis.flow_runs_total}` : kpis.flow_runs_completed}
+                icon={<Workflow className="text-slate-500" />}
+              />
+              <StatCard
+                title="Flow Completion"
+                value={kpis.flow_runs_total > 0 ? flowCompletionRate : '—'}
                 icon={<Workflow className="text-slate-500" />}
               />
             </div>
