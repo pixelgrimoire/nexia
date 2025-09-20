@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os, json, time, asyncio, uuid
 from uuid import uuid4
 from enum import Enum
@@ -22,6 +23,8 @@ from packages.common.models import (
     Note,
     Attachment,
     AuditLog,
+    Workspace,
+    WorkspaceMember,
 )
 import bcrypt
 from collections import defaultdict
@@ -35,15 +38,7 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-	# Create tables if models exist -- minimal no-op to ensure engine is importable
-	try:
-		with engine.begin() as conn:
-			conn.execute(text("""
-			-- Tables are created elsewhere; this is a no-op placeholder to ensure engine is importable
-			"""))
-	except Exception:
-		# ignore DB errors in dev when Postgres isn't available yet
-		pass
+	# Keep lifespan lightweight and avoid opening DB connections in tests/dev
 	yield
 
 
@@ -639,6 +634,12 @@ def _ensure_workspace_member(db: Session, workspace_id: str, user_id: str, membe
 
 
 def _ensure_default_workspace_for_user(db: Session, user: User) -> Workspace:
+    # Ensure tables exist in dev/test when using SQLite
+    try:
+        Workspace.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+        WorkspaceMember.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
     org_id = str(user.org_id)
     workspace = (
         db.query(Workspace)
@@ -702,6 +703,12 @@ def _workspace_member_out(member: WorkspaceMember, user_row: User | None = None)
 
 
 def _workspace_memberships_payload(db: Session, user_id: str) -> list[dict]:
+    # Ensure tables exist in dev/test when using SQLite
+    try:
+        Workspace.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+        WorkspaceMember.__table__.create(bind=engine, checkfirst=True)  # type: ignore
+    except Exception:
+        pass
     rows = (
         db.query(WorkspaceMember, Workspace)
         .join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
@@ -755,6 +762,26 @@ class WorkspaceMembershipOut(BaseModel):
     workspace_id: str
     workspace_name: str
     role: str
+
+# Rebuild response models that reference this type (forward refs under __future__ annotations)
+try:
+    TokenOut.model_rebuild(force=True)
+    TokenPair.model_rebuild(force=True)
+except Exception:
+    pass
+
+
+class TokenPairOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    default_workspace_id: str | None = None
+    workspaces: list[WorkspaceMembershipOut] | None = None
+
+try:
+    TokenPairOut.model_rebuild(force=True)
+except Exception:
+    pass
 
 
 # --- Auth real (MVP) --------------------------------------------------------
@@ -817,7 +844,7 @@ def _mint_refresh(user: User, db: Session, days: int = 7) -> str:
     return token
 
 
-@app.post("/api/auth/register", response_model=TokenPair)
+@app.post("/api/auth/register", response_model=TokenPairOut)
 def register(body: RegisterBody, db: Session = Depends(get_db)):
     org = db.query(Organization).filter(Organization.name == body.org_name).first()
     if not org:
@@ -845,7 +872,7 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
     return {"access_token": access, "refresh_token": refresh, "token_type": "bearer", "default_workspace_id": default_workspace_id, "workspaces": memberships}
 
 
-@app.post("/api/auth/login", response_model=TokenPair)
+@app.post("/api/auth/login", response_model=TokenPairOut)
 def login(body: LoginBody, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not _verify_password(body.password, user.password_hash):
@@ -867,7 +894,7 @@ class RefreshBody(BaseModel):
     refresh_token: str
 
 
-@app.post("/api/auth/refresh", response_model=TokenPair)
+@app.post("/api/auth/refresh", response_model=TokenPairOut)
 def refresh_token(body: RefreshBody, db: Session = Depends(get_db)):
     rt = db.query(RefreshToken).filter(RefreshToken.token == body.refresh_token).first()
     if not rt or getattr(rt, "revoked", "false") == "true":

@@ -123,91 +123,79 @@ async def receive(req: Request):
 		pass
 
 	# Handle WhatsApp delivery/read statuses for outbound messages (best-effort)
+	statuses = []
 	try:
-		statuses = []
-		try:
-			entry = payload.get("entry", [])
-			if entry:
-				changes = entry[0].get("changes", [])
-				if changes:
-					value = changes[0].get("value", {})
-					statuses = value.get("statuses", []) or []
-		except Exception:
-			statuses = []
-		if statuses:
-			from packages.common.db import SessionLocal as _SL
-			for st in statuses:
-				wa_id = (st or {}).get("id")
-				new_status = (st or {}).get("status")  # e.g., sent|delivered|read|failed
-				if not wa_id or not new_status:
-					continue
-				try:
-					with _SL() as db:
-						row = None
-						try:
-							row = db.query(Message).filter(Message.meta["wa_msg_id"].astext == str(wa_id)).first()  # type: ignore
-						except Exception:
-							row = None
-						if row is None:
-							# fallback: scan recent messages to match by meta
-							try:
-								candidates = db.query(Message).order_by(Message.id.desc()).limit(200).all()
-								for r in candidates:
-									try:
-										m = getattr(r, "meta", None) or {}
-										if isinstance(m, dict) and str(m.get("wa_msg_id")) == str(wa_id):
-											row = r
-											break
-								except Exception:
-									pass
-							except Exception:
-								row = None
-						if row is not None:
-							try:
-								# update status if changed
-								if getattr(row, "status", None) != new_status:
-									row.status = new_status
-									try:
-										# optionally stash last status in meta
-										meta = getattr(row, "meta", None) or {}
-										if isinstance(meta, dict):
-											meta["last_status"] = new_status
-											row.meta = meta
-									except Exception:
-										pass
-								db.commit()
-								# emit webhook event for status update
-								try:
-									payload_ev = {
-										"conversation_id": getattr(row, "conversation_id", None),
-										"message_id": getattr(row, "id", None),
-										"wa_msg_id": wa_id,
-										"status": new_status,
-										"channel_id": str(channel_id) if channel_id else None,
-									}
-									org_for_evt = str(org_id) if org_id else None
-									if not org_for_evt:
-										# derive from conversation when possible
-										try:
-											conv = db.get(Conversation, getattr(row, "conversation_id", None))
-											if conv and getattr(conv, "org_id", None):
-												org_for_evt = str(conv.org_id)
-										except Exception:
-											pass
-									if org_for_evt:
-										redis.xadd("nf:webhooks", {
-											"org_id": org_for_evt,
-											"type": "message.status",
-											"body": json.dumps(payload_ev),
-											"event_id": __import__('uuid').uuid4().hex,
-											"ts": str(int(__import__('time').time()*1000)),
-										})
-								except Exception:
-									pass
-						except Exception:
-							logger.exception("status update failed")
+		entry = payload.get("entry", [])
+		if entry:
+			changes = entry[0].get("changes", [])
+			if changes:
+				value = changes[0].get("value", {})
+				statuses = value.get("statuses", []) or []
 	except Exception:
-		logger.exception("statuses handling failed")
+		statuses = []
+	if statuses:
+		from packages.common.db import SessionLocal as _SL
+		for st in statuses:
+			wa_id = (st or {}).get("id")
+			new_status = (st or {}).get("status")
+			if not wa_id or not new_status:
+				continue
+			with _SL() as db:
+				row = None
+				try:
+					row = db.query(Message).filter(Message.meta["wa_msg_id"].astext == str(wa_id)).first()  # type: ignore
+				except Exception:
+					row = None
+				if row is None:
+					try:
+						candidates = db.query(Message).order_by(Message.id.desc()).limit(200).all()
+						for r in candidates:
+							m = getattr(r, "meta", None) or {}
+							if isinstance(m, dict) and str(m.get("wa_msg_id")) == str(wa_id):
+								row = r
+								break
+					except Exception:
+						pass
+				if row is not None:
+					try:
+						if getattr(row, "status", None) != new_status:
+							row.status = new_status
+							try:
+								meta = getattr(row, "meta", None) or {}
+								if isinstance(meta, dict):
+									meta["last_status"] = new_status
+									row.meta = meta
+							except Exception:
+								pass
+								db.commit()
+							except Exception:
+								pass
+							payload_ev = {
+							"conversation_id": getattr(row, "conversation_id", None),
+							"message_id": getattr(row, "id", None),
+							"wa_msg_id": wa_id,
+							"status": new_status,
+							"channel_id": str(channel_id) if channel_id else None,
+						}
+						org_for_evt = str(org_id) if org_id else None
+						if not org_for_evt:
+							try:
+								conv = db.get(Conversation, getattr(row, "conversation_id", None))
+								if conv and getattr(conv, "org_id", None):
+									org_for_evt = str(conv.org_id)
+							except Exception:
+								pass
+						if org_for_evt:
+							try:
+								redis.xadd("nf:webhooks", {
+									"org_id": org_for_evt,
+									"type": "message.status",
+									"body": json.dumps(payload_ev),
+									"event_id": __import__('uuid').uuid4().hex,
+									"ts": str(int(__import__('time').time()*1000)),
+								})
+							except Exception:
+								pass
 
 	# Fan-out: inbox (SSE) and incoming flow with enrichment when available
 	out_common = {"source": "wa", "payload": json.dumps(payload)}

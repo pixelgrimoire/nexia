@@ -14,7 +14,11 @@ def get_engine():
     global _ENGINE, _ENGINE_URL
     url = _current_url()
     if _ENGINE is None or _ENGINE_URL != url:
-        _ENGINE = create_engine(url, echo=False, future=True)
+        kwargs = {"echo": False, "future": True}
+        if url.startswith("sqlite"):
+            # Allow usage across threads in FastAPI threadpool during tests
+            kwargs["connect_args"] = {"check_same_thread": False}
+        _ENGINE = create_engine(url, **kwargs)
         _ENGINE_URL = url
     return _ENGINE
 
